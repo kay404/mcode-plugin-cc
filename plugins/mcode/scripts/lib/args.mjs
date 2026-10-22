@@ -1,7 +1,13 @@
 export const DELEGATE_OPTION_CONFIG = {
   valueOptions: ["model", "effort"],
-  booleanOptions: ["read-only", "full", "resume", "fresh", "json"],
-  supportedHint: "--read-only, --full, --resume, --fresh, --model <value>, --effort <value>, --json"
+  booleanOptions: ["read-only", "full", "resume", "fresh", "background", "json"],
+  supportedHint: "--read-only, --full, --resume, --fresh, --model <value>, --effort <value>, --background, --json"
+};
+
+export const DELEGATE_WORKER_OPTION_CONFIG = {
+  valueOptions: ["job-id"],
+  booleanOptions: [],
+  supportedHint: "--job-id <id>"
 };
 
 export const SETUP_OPTION_CONFIG = {
@@ -17,15 +23,21 @@ export const RESUME_CANDIDATE_OPTION_CONFIG = {
 };
 
 export const STATUS_OPTION_CONFIG = {
-  valueOptions: [],
-  booleanOptions: ["all", "json"],
-  supportedHint: "--all, --json"
+  valueOptions: ["timeout-ms"],
+  booleanOptions: ["all", "json", "wait"],
+  supportedHint: "--wait, --timeout-ms <ms>, --all, --json"
 };
 
 export const RESULT_OPTION_CONFIG = {
   valueOptions: [],
   booleanOptions: ["all", "json"],
   supportedHint: "--all, --json"
+};
+
+export const CANCEL_OPTION_CONFIG = {
+  valueOptions: [],
+  booleanOptions: ["json"],
+  supportedHint: "--json"
 };
 
 const SUPPORTED_OPTIONS_HINT = "--read-only, --full, --model <value>, --effort <value>, --json";

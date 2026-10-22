@@ -1,6 +1,6 @@
 ---
 description: Show mcode Jobs in this Claude session or inspect a single Job
-argument-hint: "[job-id] [--all] [--json]"
+argument-hint: "[job-id] [--wait] [--timeout-ms <ms>] [--all] [--json]"
 allowed-tools: Bash(node:*)
 ---
 

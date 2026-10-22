@@ -81,11 +81,11 @@ test("delegate does not wrap prompt when --read-only is not passed", () => {
 });
 
 test("delegate rejects unsupported options with clear message", () => {
-  const res = runCompanion(["delegate", "--background", "task"]);
+  const res = runCompanion(["delegate", "--bogus-flag", "task"]);
 
   assert.notEqual(res.status, 0);
-  assert.ok(res.stderr.includes("Unsupported option: --background"));
-  assert.ok(res.stderr.includes("Supported options: --read-only, --full, --resume, --fresh, --model <value>, --effort <value>, --json"));
+  assert.ok(res.stderr.includes("Unsupported option: --bogus-flag"));
+  assert.ok(res.stderr.includes("Supported options: --read-only, --full, --resume, --fresh, --model <value>, --effort <value>, --background, --json"));
 });
 
 test("delegate rejects --permission smart rather than appending to prompt", () => {

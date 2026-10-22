@@ -150,6 +150,7 @@ export function buildJobJsonPayload(job) {
     status: job.status,
     reason: job.reason ?? null,
     prompt: job.prompt,
+    cwd: job.cwd ?? null,
     sessionId: job.sessionId ?? null,
     mcodeSessionId: job.mcodeSessionId ?? null,
     processId: job.processId ?? null,

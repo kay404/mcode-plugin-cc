@@ -188,6 +188,28 @@ export async function runMcode(options) {
       stdio: ["pipe", "pipe", "pipe"]
     });
 
+    const forwardSignal = (sig) => {
+      try {
+        child.kill(sig);
+      } catch {}
+      const code = sig === "SIGINT" ? 130 : sig === "SIGTERM" ? 143 : 129;
+      process.exit(code);
+    };
+
+    const onSigTerm = () => forwardSignal("SIGTERM");
+    const onSigInt = () => forwardSignal("SIGINT");
+    const onSigHup = () => forwardSignal("SIGHUP");
+
+    process.on("SIGTERM", onSigTerm);
+    process.on("SIGINT", onSigInt);
+    process.on("SIGHUP", onSigHup);
+
+    function cleanupSignals() {
+      process.off("SIGTERM", onSigTerm);
+      process.off("SIGINT", onSigInt);
+      process.off("SIGHUP", onSigHup);
+    }
+
     if (options.prompt) {
       child.stdin.end(options.prompt, "utf8");
     } else {
@@ -208,6 +230,7 @@ export async function runMcode(options) {
     });
 
     child.on("error", (err) => {
+      cleanupSignals();
       if (err.code === "ENOENT") {
         const notFoundErr = new Error(FAILURE_REASONS["mcode-not-found"].defaultMessage);
         notFoundErr.reason = "mcode-not-found";
@@ -217,6 +240,7 @@ export async function runMcode(options) {
     });
 
     child.on("close", (exitCode) => {
+      cleanupSignals();
       if (stdoutBuffer.trim()) {
         processLine(stdoutBuffer.trim());
       }

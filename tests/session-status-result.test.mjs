@@ -194,7 +194,7 @@ test("status rejects unsupported options with clear message", () => {
   const res = runCompanion(["status", "--bogus-flag"]);
   assert.notEqual(res.status, 0);
   assert.ok(res.stderr.includes("Unsupported option: --bogus-flag"));
-  assert.ok(res.stderr.includes("Supported options: --all, --json"));
+  assert.ok(res.stderr.includes("Supported options: --wait, --timeout-ms <ms>, --all, --json"));
 });
 
 test("result defaults to the most recent finished Job of the session", () => {
