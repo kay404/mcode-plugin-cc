@@ -3,7 +3,6 @@
 import process from "node:process";
 import {
   parseArgs,
-  splitRawArgs,
   DELEGATE_OPTION_CONFIG,
   STATUS_OPTION_CONFIG,
   RESULT_OPTION_CONFIG
@@ -11,20 +10,21 @@ import {
 import {
   generateJobId,
   saveJob,
-  loadJob,
+  loadJobOrThrow,
   readJobLogs,
   listJobs,
   findJob,
+  findLatestFinishedJob,
   appendJobLog,
-  resolveWorkspaceRoot
+  resolveWorkspaceRoot,
+  FINISHED_STATUSES
 } from "./lib/job-store.mjs";
 import { runMcode, wrapReadOnlyPrompt } from "./lib/mcode-runner.mjs";
 import {
   renderDelegationResult,
   renderStatusTable,
   renderJobDetail,
-  buildJobJsonPayload,
-  formatAge
+  buildJobJsonPayload
 } from "./lib/render.mjs";
 
 const SESSION_ID_ENV = "MCODE_CLAUDE_SESSION_ID";
@@ -34,29 +34,21 @@ function printUsage() {
     "Usage:",
     "  node scripts/mcode-companion.mjs delegate [--read-only] [--full] [--model <model>] [--effort <effort>] [--json] <task>",
     "  node scripts/mcode-companion.mjs status [job-id] [--all] [--json]",
-    "  node scripts/mcode-companion.mjs result [job-id] [--json]"
+    "  node scripts/mcode-companion.mjs result [job-id] [--all] [--json]"
   ].join("\n"));
 }
 
-function extractSubcommandTokens(rawArgs) {
+function splitSubcommandArgs(rawArgs) {
   if (rawArgs.length === 1) {
-    return splitRawArgs(rawArgs[0]);
+    return rawArgs[0].trim().split(/\s+/).filter(Boolean);
   }
   return rawArgs;
 }
 
 async function handleDelegate(rawTokens) {
-  let tokens;
-  try {
-    tokens = extractSubcommandTokens(rawTokens);
-  } catch (err) {
-    console.error(`Error: ${err.message}`);
-    process.exit(1);
-  }
-
   let parsed;
   try {
-    parsed = parseArgs(tokens, DELEGATE_OPTION_CONFIG);
+    parsed = parseArgs(rawTokens, DELEGATE_OPTION_CONFIG);
   } catch (err) {
     console.error(`Error: ${err.message}`);
     process.exit(1);
@@ -85,12 +77,12 @@ async function handleDelegate(rawTokens) {
     title: prompt,
     prompt,
     workspace: workspaceRoot,
-    sessionId: process.env[SESSION_ID_ENV] ?? null,
+    sessionId: process.env[SESSION_ID_ENV] || null,
     processId: process.pid,
     readOnly,
     permission,
-    model: options.model ?? null,
-    effort: options.effort ?? null,
+    model: options.model || null,
+    effort: options.effort || null,
     mcodeSessionId: null,
     status: "running",
     reason: null,
@@ -126,7 +118,7 @@ async function handleDelegate(rawTokens) {
       reason: err.reason || "error",
       output: null,
       error: { message: err.message },
-      mcodeSessionId: err.sessionId ?? null,
+      mcodeSessionId: err.sessionId || null,
       exitCode: 1,
       stderr: err.message
     };
@@ -136,7 +128,7 @@ async function handleDelegate(rawTokens) {
   job.reason = outcome.reason;
   job.output = outcome.output;
   job.error = outcome.error;
-  job.usage = outcome.usage ?? null;
+  job.usage = outcome.usage || null;
   if (outcome.mcodeSessionId) {
     job.mcodeSessionId = outcome.mcodeSessionId;
   }
@@ -158,16 +150,9 @@ async function handleDelegate(rawTokens) {
 }
 
 async function handleStatus(rawTokens) {
-  let tokens;
-  try {
-    tokens = extractSubcommandTokens(rawTokens);
-  } catch (err) {
-    console.error(`Error: ${err.message}`);
-    process.exit(1);
-  }
-
   let parsed;
   try {
+    const tokens = splitSubcommandArgs(rawTokens);
     parsed = parseArgs(tokens, STATUS_OPTION_CONFIG);
   } catch (err) {
     console.error(`Error: ${err.message}`);
@@ -176,7 +161,7 @@ async function handleStatus(rawTokens) {
 
   const { options, positionals } = parsed;
   const workspaceRoot = resolveWorkspaceRoot(process.cwd());
-  const currentSessionId = process.env[SESSION_ID_ENV] ?? null;
+  const currentSessionId = process.env[SESSION_ID_ENV] || null;
   const targetJobId = positionals[0] || null;
 
   if (targetJobId) {
@@ -191,7 +176,7 @@ async function handleStatus(rawTokens) {
       process.exit(1);
     }
 
-    const progressLines = readJobLogs(workspaceRoot, job.id, 10);
+    const progressLines = readJobLogs(workspaceRoot, job.id).slice(-10);
     if (options.json) {
       console.log(JSON.stringify({
         ...buildJobJsonPayload(job),
@@ -209,36 +194,17 @@ async function handleStatus(rawTokens) {
   });
 
   if (options.json) {
-    const payload = jobs.map((j) => ({
-      id: j.id,
-      kind: j.kind,
-      title: j.title || null,
-      status: j.status,
-      reason: j.reason ?? null,
-      sessionId: j.sessionId ?? null,
-      mcodeSessionId: j.mcodeSessionId ?? null,
-      createdAt: j.createdAt,
-      updatedAt: j.updatedAt,
-      age: formatAge(j.createdAt),
-      progressPreview: j.progressPreview || null
-    }));
-    console.log(JSON.stringify(payload, null, 2));
+    const fullJobs = jobs.map((j) => loadJobOrThrow(workspaceRoot, j.id));
+    console.log(JSON.stringify(fullJobs.map(buildJobJsonPayload), null, 2));
   } else {
     process.stdout.write(renderStatusTable(jobs));
   }
 }
 
 async function handleResult(rawTokens) {
-  let tokens;
-  try {
-    tokens = extractSubcommandTokens(rawTokens);
-  } catch (err) {
-    console.error(`Error: ${err.message}`);
-    process.exit(1);
-  }
-
   let parsed;
   try {
+    const tokens = splitSubcommandArgs(rawTokens);
     parsed = parseArgs(tokens, RESULT_OPTION_CONFIG);
   } catch (err) {
     console.error(`Error: ${err.message}`);
@@ -247,32 +213,36 @@ async function handleResult(rawTokens) {
 
   const { options, positionals } = parsed;
   const workspaceRoot = resolveWorkspaceRoot(process.cwd());
-  const currentSessionId = process.env[SESSION_ID_ENV] ?? null;
+  const currentSessionId = process.env[SESSION_ID_ENV] || null;
   const targetJobId = positionals[0] || null;
 
   let job;
   try {
-    job = findJob(workspaceRoot, targetJobId, {
-      all: false,
-      sessionId: currentSessionId,
-      finishedOnly: true,
-      defaultLatestFinished: !targetJobId
-    });
+    if (targetJobId) {
+      job = findJob(workspaceRoot, targetJobId, {
+        all: Boolean(options.all),
+        sessionId: currentSessionId
+      });
+    } else {
+      job = findLatestFinishedJob(workspaceRoot, {
+        all: Boolean(options.all),
+        sessionId: currentSessionId
+      });
+    }
   } catch (err) {
     console.error(`Error: ${err.message}`);
     process.exit(1);
   }
 
-  if (job.status === "running" || job.status === "queued") {
-    console.error(`Error: Job "${job.id}" is not finished (status: ${job.status}).`);
+  if (!FINISHED_STATUSES.has(job.status)) {
+    console.error(`Error: Job ${job.id} is not finished (status: ${job.status}).`);
     process.exit(1);
   }
 
   if (options.json) {
     console.log(JSON.stringify(buildJobJsonPayload(job), null, 2));
   } else {
-    const rendered = job.renderedOutput || renderDelegationResult(job);
-    process.stdout.write(rendered);
+    process.stdout.write(job.renderedOutput);
   }
 }
 

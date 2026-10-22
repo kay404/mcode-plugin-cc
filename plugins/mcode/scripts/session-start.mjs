@@ -11,6 +11,10 @@ function readStdin() {
   }
 }
 
+function escapeShellSingleQuote(value) {
+  return `'${String(value).replace(/'/g, "'\\''")}'`;
+}
+
 function main() {
   const input = readStdin();
   let sessionId = null;
@@ -30,10 +34,10 @@ function main() {
 
   const exportsToAppend = [];
   if (sessionId) {
-    exportsToAppend.push(`export MCODE_CLAUDE_SESSION_ID=${JSON.stringify(sessionId)}`);
+    exportsToAppend.push(`export MCODE_CLAUDE_SESSION_ID=${escapeShellSingleQuote(sessionId)}`);
   }
   if (process.env.CLAUDE_PLUGIN_DATA) {
-    exportsToAppend.push(`export CLAUDE_PLUGIN_DATA=${JSON.stringify(process.env.CLAUDE_PLUGIN_DATA)}`);
+    exportsToAppend.push(`export CLAUDE_PLUGIN_DATA=${escapeShellSingleQuote(process.env.CLAUDE_PLUGIN_DATA)}`);
   }
 
   if (exportsToAppend.length > 0) {

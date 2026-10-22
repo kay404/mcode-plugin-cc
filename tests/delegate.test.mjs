@@ -35,7 +35,6 @@ function runCompanion(args, options = {}) {
     ...process.env,
     PATH: options.noMcodeOnPath ? `${nodeDir}:/usr/bin:/bin` : `${binDir}:${process.env.PATH}`,
     CLAUDE_PLUGIN_DATA: pluginDataDir,
-    CLAUDE_SESSION_ID: "test-claude-session-001",
     MCODE_CLAUDE_SESSION_ID: "test-claude-session-001",
     MCODE_RECORD_ARGV: recordArgvFile,
     MCODE_RECORD_CWD: recordCwdFile,
@@ -219,6 +218,17 @@ test("delegate uses full permission only when --full is requested", () => {
 
   assert.equal(res.status, 0);
   assert.equal(res.recordedArgv[res.recordedArgv.indexOf("--permission") + 1], "full");
+});
+
+test("delegate never re-splits arguments: task containing --full, quotes, apostrophes and newlines preserved byte-identical with smart permission", () => {
+  const prompt = "Explain what the --full flag does\nand why it's used with \"double quotes\".";
+  const res = runCompanion(["delegate", prompt], {
+    env: { MCODE_FIXTURE: path.join(FIXTURES_DIR, "success.stream.jsonl") }
+  });
+
+  assert.equal(res.status, 0);
+  assert.equal(res.recordedArgv[res.recordedArgv.indexOf("--permission") + 1], "smart");
+  assert.equal(res.recordedStdin, prompt);
 });
 
 test("delegate outputs structured JSON when --json is provided", () => {

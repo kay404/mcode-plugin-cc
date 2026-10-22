@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -72,58 +72,61 @@ function runSessionStartHook(stdinJson, env = {}) {
   };
 }
 
-test("SessionStart hook appends exports to CLAUDE_ENV_FILE and companion scopes Jobs by that session id", () => {
+test("SessionStart hook appends single-quoted exports safe from subshell expansion", () => {
   const pluginDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcode-test-hook-data-"));
   const envFile = path.join(pluginDataDir, "claude-env.sh");
   fs.writeFileSync(envFile, "# Session env file\n");
 
+  const trickyValue = '/path/with spaces/$(whoami)/`date`/"double\'quotes"';
+  const trickySessionId = "session-id'with$(evil)";
+
   const hookRes = runSessionStartHook(
-    { session_id: "claude-session-from-hook-99" },
-    { CLAUDE_ENV_FILE: envFile, CLAUDE_PLUGIN_DATA: pluginDataDir }
+    { session_id: trickySessionId },
+    { CLAUDE_ENV_FILE: envFile, CLAUDE_PLUGIN_DATA: trickyValue }
   );
 
   assert.equal(hookRes.status, 0);
   const envContent = fs.readFileSync(envFile, "utf8");
-  assert.ok(envContent.includes('export MCODE_CLAUDE_SESSION_ID="claude-session-from-hook-99"'));
-  assert.ok(envContent.includes(`export CLAUDE_PLUGIN_DATA="${pluginDataDir}"`));
+  assert.ok(envContent.includes("export MCODE_CLAUDE_SESSION_ID='session-id'\\''with$(evil)'"));
+  assert.ok(envContent.includes(`export CLAUDE_PLUGIN_DATA='/path/with spaces/$(whoami)/\`date\`/"double'\\''quotes"'`));
+
+  // Sourcing the env file in a subshell recovers byte-identical values without executing $(whoami) or `date`
+  const subshell = spawnSync("sh", ["-c", `. "${envFile}" && printf "%s\n%s" "$MCODE_CLAUDE_SESSION_ID" "$CLAUDE_PLUGIN_DATA"`], {
+    encoding: "utf8"
+  });
+  assert.equal(subshell.status, 0);
+  const [recoveredSessionId, recoveredPluginData] = subshell.stdout.split("\n");
+  assert.equal(recoveredSessionId, trickySessionId);
+  assert.equal(recoveredPluginData, trickyValue);
 
   // Companion reading MCODE_CLAUDE_SESSION_ID records Job under that session
   const compRes = runCompanion(["delegate", "--json", "task from hooked session"], {
     pluginDataDir,
-    sessionId: "claude-session-from-hook-99",
+    sessionId: trickySessionId,
     env: { MCODE_FIXTURE: path.join(FIXTURES_DIR, "success.stream.jsonl") }
   });
 
   assert.equal(compRes.status, 0);
   const parsed = JSON.parse(compRes.stdout);
-  assert.equal(parsed.sessionId, "claude-session-from-hook-99");
+  assert.equal(parsed.sessionId, trickySessionId);
 });
 
-test("raw argument string re-splits: keeps apostrophe inside word literal (don't is one word)", () => {
+test("status splits raw argument string on whitespace", () => {
   const pluginDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcode-test-rawargs-"));
 
-  // Pass single raw argument string containing options, quotes, and "don't"
-  const res = runCompanion(["delegate", '--json "don\'t break the build"'], {
+  const res = runCompanion(["delegate", "--json", "task for raw status args"], {
     pluginDataDir,
     env: { MCODE_FIXTURE: path.join(FIXTURES_DIR, "success.stream.jsonl") }
   });
   assert.equal(res.status, 0);
   const parsed = JSON.parse(res.stdout);
-  assert.equal(parsed.prompt, "don't break the build");
 
-  // Call status passing raw argument string with quotes around job id
-  const statusRes = runCompanion(["status", `"${parsed.id}"`], {
-    pluginDataDir
-  });
+  // Pass "<id-prefix> --json" as a single raw string
+  const prefix = parsed.id.slice(0, 16);
+  const statusRes = runCompanion(["status", `${prefix} --json`], { pluginDataDir });
   assert.equal(statusRes.status, 0);
-  assert.ok(statusRes.stdout.includes(parsed.id));
-  assert.ok(statusRes.stdout.includes("don't break the build"));
-});
-
-test("raw argument string re-splits: unterminated quote is an error", () => {
-  const res = runCompanion(["status", '--all "unterminated quote']);
-  assert.notEqual(res.status, 0);
-  assert.ok(res.stderr.includes("Unterminated quote"));
+  const statusJson = JSON.parse(statusRes.stdout);
+  assert.equal(statusJson.id, parsed.id);
 });
 
 test("Job record includes title, process id, and rendered output", () => {
@@ -143,7 +146,7 @@ test("Job record includes title, process id, and rendered output", () => {
   assert.ok(parsed.renderedOutput.includes("mcode session: mvs_e833006d348440b38a85b16f960606ce"));
 });
 
-test("status table outputs id, kind, state, age, and progress preview", () => {
+test("status table outputs id, kind, state, age, and progress preview without final completion marker", () => {
   const pluginDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcode-test-status-table-"));
 
   const res = runCompanion(["delegate", "first task"], {
@@ -161,6 +164,9 @@ test("status table outputs id, kind, state, age, and progress preview", () => {
   assert.ok(statusRes.stdout.includes("PROGRESS"));
   assert.ok(statusRes.stdout.includes("delegate"));
   assert.ok(statusRes.stdout.includes("completed"));
+  // Preview must be the last non-Completed progress line
+  assert.ok(statusRes.stdout.includes("Responding..."));
+  assert.ok(!statusRes.stdout.includes("Completed with status"));
 });
 
 test("status for a single Job displays details and recent progress lines", () => {
@@ -242,11 +248,96 @@ test("result with Job id prints that specific Job output", () => {
   assert.equal(parsed.title, "specific job target");
 });
 
-test("result rejects unsupported options with clear message", () => {
-  const res = runCompanion(["result", "--all"]);
+test("result reports error when target Job is still running", () => {
+  const pluginDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcode-test-running-"));
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcode-test-bin-"));
+
+  const symlinkPath = path.join(binDir, "mcode");
+  try {
+    fs.symlinkSync(FAKE_MCODE, symlinkPath);
+  } catch {
+    fs.copyFileSync(FAKE_MCODE, symlinkPath);
+    fs.chmodSync(symlinkPath, 0o755);
+  }
+
+  const nodeDir = path.dirname(process.execPath);
+  const child = spawn(process.execPath, [COMPANION_SCRIPT, "delegate", "long running task"], {
+    cwd: ROOT_DIR,
+    env: {
+      ...process.env,
+      PATH: `${binDir}:${process.env.PATH}`,
+      CLAUDE_PLUGIN_DATA: pluginDataDir,
+      MCODE_CLAUDE_SESSION_ID: "test-running-session",
+      MCODE_SLEEP_MS: "5000",
+      MCODE_FIXTURE: path.join(FIXTURES_DIR, "success.stream.jsonl")
+    }
+  });
+
+  let runningJobId = null;
+  const start = Date.now();
+  while (Date.now() - start < 3000) {
+    try {
+      const stateDirs = fs.readdirSync(path.join(pluginDataDir, "state"));
+      if (stateDirs.length > 0) {
+        const stateFile = path.join(pluginDataDir, "state", stateDirs[0], "state.json");
+        if (fs.existsSync(stateFile)) {
+          const state = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+          if (state.jobs.length > 0 && state.jobs[0].status === "running") {
+            runningJobId = state.jobs[0].id;
+            break;
+          }
+        }
+      }
+    } catch {}
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+  }
+  assert.ok(runningJobId, "Job record should be created with status running");
+
+  const res = runCompanion(["result", runningJobId], {
+    pluginDataDir,
+    sessionId: "test-running-session"
+  });
+
+  child.kill("SIGKILL");
+
   assert.notEqual(res.status, 0);
-  assert.ok(res.stderr.includes("Unsupported option: --all"));
-  assert.ok(res.stderr.includes("Supported options: --json"));
+  assert.ok(res.stderr.includes(`Job ${runningJobId} is not finished (status: running)`));
+});
+
+test("result accepts --all to read finished Job from another session by id", () => {
+  const pluginDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcode-test-result-all-"));
+
+  // Session A creates Job A
+  const jobARes = runCompanion(["delegate", "--json", "task from session A"], {
+    pluginDataDir,
+    sessionId: "session-A",
+    env: { MCODE_FIXTURE: path.join(FIXTURES_DIR, "success.stream.jsonl") }
+  });
+  assert.equal(jobARes.status, 0);
+  const jobA = JSON.parse(jobARes.stdout);
+
+  // In Session B, result jobA.id without --all fails
+  const resWithoutAll = runCompanion(["result", jobA.id], {
+    pluginDataDir,
+    sessionId: "session-B"
+  });
+  assert.notEqual(resWithoutAll.status, 0);
+  assert.ok(resWithoutAll.stderr.includes(`No Job found matching "${jobA.id}"`));
+
+  // In Session B, result jobA.id --all succeeds
+  const resWithAll = runCompanion(["result", jobA.id, "--all"], {
+    pluginDataDir,
+    sessionId: "session-B"
+  });
+  assert.equal(resWithAll.status, 0);
+  assert.ok(resWithAll.stdout.includes("OK"));
+});
+
+test("result rejects unsupported options with clear message", () => {
+  const res = runCompanion(["result", "--bogus-flag"]);
+  assert.notEqual(res.status, 0);
+  assert.ok(res.stderr.includes("Unsupported option: --bogus-flag"));
+  assert.ok(res.stderr.includes("Supported options: --all, --json"));
 });
 
 test("result with no finished jobs exits with clear error", () => {
@@ -271,7 +362,7 @@ test("Job ids resolve by unique prefix, ambiguous prefix lists candidates, unkno
   });
   const job2 = JSON.parse(job2Res.stdout);
 
-  // Unique prefix resolution (e.g. full id or unambiguous prefix)
+  // Unique prefix resolution
   const uniquePrefix = job1.id;
   const resUnique = runCompanion(["status", uniquePrefix, "--json"], { pluginDataDir });
   assert.equal(resUnique.status, 0);
@@ -384,4 +475,15 @@ test("index bounded at 50 (newest first), pruned records' files removed", () => 
   const queryPrunedRes = runCompanion(["status", jobIds[0], "--all"], { pluginDataDir });
   assert.notEqual(queryPrunedRes.status, 0);
   assert.ok(queryPrunedRes.stderr.includes(`No Job found matching "${jobIds[0]}"`));
+
+  // Count files in Job store's jobs directory to prove pruned records' files are deleted
+  const stateDirs = fs.readdirSync(path.join(pluginDataDir, "state"));
+  const jobsDir = path.join(pluginDataDir, "state", stateDirs[0], "jobs");
+  const files = fs.readdirSync(jobsDir);
+  const jsonFiles = files.filter((f) => f.endsWith(".json"));
+  const logFiles = files.filter((f) => f.endsWith(".log"));
+  assert.equal(jsonFiles.length, 50);
+  assert.equal(logFiles.length, 50);
+  assert.ok(!fs.existsSync(path.join(jobsDir, `${jobIds[0]}.json`)));
+  assert.ok(!fs.existsSync(path.join(jobsDir, `${jobIds[0]}.log`)));
 });

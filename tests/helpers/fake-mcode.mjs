@@ -24,6 +24,11 @@ if (process.env.MCODE_RECORD_STDIN) {
   fs.writeFileSync(process.env.MCODE_RECORD_STDIN, stdinData, "utf8");
 }
 
+if (process.env.MCODE_SLEEP_MS) {
+  const ms = parseInt(process.env.MCODE_SLEEP_MS, 10);
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
 if (process.env.MCODE_FAIL_EXIT_CODE) {
   const code = parseInt(process.env.MCODE_FAIL_EXIT_CODE, 10) || 1;
   const stderrMsg = process.env.MCODE_STDERR || "Fake mcode execution error";

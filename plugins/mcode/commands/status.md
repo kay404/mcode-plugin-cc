@@ -5,3 +5,5 @@ allowed-tools: Bash(node:*)
 ---
 
 !`node "${CLAUDE_PLUGIN_ROOT}/scripts/mcode-companion.mjs" status "$ARGUMENTS"`
+
+Present the companion output above verbatim and in full, without summarising or adding commentary.

@@ -7,7 +7,7 @@ export function renderDelegationResult(job) {
     : "";
 
   if (job.status === "completed") {
-    const rawOutput = (job.output ?? "").trim();
+    const rawOutput = (job.output || "").trim();
     return `${rawOutput}${sessionFooter}\n`;
   }
 
@@ -15,7 +15,7 @@ export function renderDelegationResult(job) {
     return `mcode delegation was cancelled.${sessionFooter}\n`;
   }
 
-  const reasonConfig = FAILURE_REASONS[job.reason] ?? FAILURE_REASONS.error;
+  const reasonConfig = FAILURE_REASONS[job.reason] || FAILURE_REASONS.error;
 
   if (job.reason === "needs-interaction") {
     const command = sessionId ? `mcode --session ${sessionId}` : "mcode";
@@ -34,13 +34,21 @@ export function renderDelegationResult(job) {
 
 export function formatAge(dateStr, now = Date.now()) {
   const ts = new Date(dateStr).getTime();
-  if (Number.isNaN(ts)) return "-";
+  if (Number.isNaN(ts)) {
+    return "-";
+  }
   const diffSec = Math.max(0, Math.floor((now - ts) / 1000));
-  if (diffSec < 60) return `${diffSec}s`;
+  if (diffSec < 60) {
+    return `${diffSec}s`;
+  }
   const diffMin = Math.floor(diffSec / 60);
-  if (diffMin < 60) return `${diffMin}m`;
+  if (diffMin < 60) {
+    return `${diffMin}m`;
+  }
   const diffHours = Math.floor(diffMin / 60);
-  if (diffHours < 24) return `${diffHours}h`;
+  if (diffHours < 24) {
+    return `${diffHours}h`;
+  }
   const diffDays = Math.floor(diffHours / 24);
   return `${diffDays}d`;
 }
@@ -80,7 +88,7 @@ export function renderJobDetail(job, progressLines = []) {
     `Job ID:         ${job.id}`,
     `Kind:           ${job.kind}`,
     `State:          ${job.status}${job.reason ? ` (${job.reason})` : ""}`,
-    `Title:          ${job.title || job.prompt || "-"}`,
+    `Title:          ${job.title || "-"}`,
     `Claude session: ${job.sessionId || "-"}`,
     `mcode session:  ${job.mcodeSessionId ? job.mcodeSessionId : "-"}`
   ];
@@ -109,17 +117,17 @@ export function buildJobJsonPayload(job) {
   return {
     id: job.id,
     kind: job.kind,
-    title: job.title ?? job.prompt ?? null,
+    title: job.title,
     status: job.status,
-    reason: job.reason ?? null,
+    reason: job.reason || null,
     prompt: job.prompt,
-    sessionId: job.sessionId ?? null,
-    mcodeSessionId: job.mcodeSessionId ?? null,
-    processId: job.processId ?? null,
-    output: job.output ?? null,
-    renderedOutput: job.renderedOutput ?? null,
-    error: job.error ?? null,
-    usage: job.usage ?? null,
+    sessionId: job.sessionId || null,
+    mcodeSessionId: job.mcodeSessionId || null,
+    processId: job.processId || null,
+    output: job.output || null,
+    renderedOutput: job.renderedOutput || null,
+    error: job.error || null,
+    usage: job.usage || null,
     createdAt: job.createdAt,
     updatedAt: job.updatedAt
   };

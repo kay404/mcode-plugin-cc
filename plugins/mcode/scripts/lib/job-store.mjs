@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 
+export const FINISHED_STATUSES = new Set(["completed", "failed", "cancelled"]);
+
 const MAX_JOBS = 50;
 const STATE_VERSION = 1;
 const PLUGIN_DATA_ENV = "CLAUDE_PLUGIN_DATA";
@@ -95,7 +97,7 @@ export function saveJob(cwd, job) {
   const indexEntry = {
     id: job.id,
     kind: job.kind,
-    title: job.title ?? job.prompt ?? null,
+    title: job.title,
     status: job.status,
     reason: job.reason ?? null,
     sessionId: job.sessionId ?? null,
@@ -150,63 +152,61 @@ export function loadJob(cwd, jobId) {
   }
 }
 
-export function readJobLogs(cwd, jobId, maxLines = 10) {
+export function loadJobOrThrow(cwd, jobId) {
+  const job = loadJob(cwd, jobId);
+  if (!job) {
+    throw new Error(`Job "${jobId}" record not found.`);
+  }
+  return job;
+}
+
+export function readJobLogs(cwd, jobId) {
   const logFile = resolveJobLogFile(cwd, jobId);
   if (!fs.existsSync(logFile)) {
     return [];
   }
   try {
     const content = fs.readFileSync(logFile, "utf8");
-    const lines = content.split("\n").filter((line) => line.trim().length > 0);
-    return lines.slice(-maxLines);
+    return content.split("\n").filter((line) => line.trim().length > 0);
   } catch {
     return [];
   }
 }
 
-export function getJobProgressPreview(cwd, jobId, fallback = "") {
-  const lines = readJobLogs(cwd, jobId, 1);
-  if (lines.length > 0) {
-    const raw = lines[0];
+export function getJobProgressPreview(cwd, jobId) {
+  const lines = readJobLogs(cwd, jobId);
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const raw = lines[i];
     const match = raw.match(/^\[[^\]]+\]\s*(.*)$/);
-    return match ? match[1] : raw;
+    const text = match ? match[1] : raw;
+    if (!text.startsWith("Completed with status")) {
+      return text.length > 60 ? `${text.slice(0, 57)}...` : text;
+    }
   }
-  return fallback;
+  return "-";
+}
+
+export function filterJobsBySession(jobs, options = {}) {
+  if (options.all || options.sessionId === undefined) {
+    return jobs;
+  }
+  return jobs.filter((j) => j.sessionId === options.sessionId);
+}
+
+export function findLatestFinishedJob(cwd, options = {}) {
+  const candidates = filterJobsBySession(loadState(cwd).jobs, options);
+  const finished = candidates.find((j) => FINISHED_STATUSES.has(j.status));
+  if (!finished) {
+    throw new Error("No finished Jobs found for this session.");
+  }
+  return loadJobOrThrow(cwd, finished.id);
 }
 
 export function findJob(cwd, selector, options = {}) {
-  const state = loadState(cwd);
-  let candidates = state.jobs;
-
-  if (!options.all && options.sessionId !== undefined) {
-    candidates = candidates.filter((j) => j.sessionId === options.sessionId);
-  }
-
-  if (options.finishedOnly) {
-    candidates = candidates.filter((j) => j.status === "completed" || j.status === "failed" || j.status === "cancelled");
-  }
-
-  if (!selector) {
-    if (options.defaultLatestFinished) {
-      if (candidates.length === 0) {
-        throw new Error("No finished Jobs found for this session.");
-      }
-      const loaded = loadJob(cwd, candidates[0].id);
-      if (!loaded) {
-        throw new Error(`Job "${candidates[0].id}" record not found.`);
-      }
-      return loaded;
-    }
-    return null;
-  }
-
+  const candidates = filterJobsBySession(loadState(cwd).jobs, options);
   const exactMatch = candidates.find((j) => j.id === selector);
   if (exactMatch) {
-    const loaded = loadJob(cwd, exactMatch.id);
-    if (!loaded) {
-      throw new Error(`Job "${exactMatch.id}" record not found.`);
-    }
-    return loaded;
+    return loadJobOrThrow(cwd, exactMatch.id);
   }
 
   const prefixMatches = candidates.filter((j) => j.id.startsWith(selector));
@@ -219,23 +219,13 @@ export function findJob(cwd, selector, options = {}) {
     throw new Error(`Ambiguous Job ID prefix "${selector}". Matching Jobs:\n${candidateList}`);
   }
 
-  const loaded = loadJob(cwd, prefixMatches[0].id);
-  if (!loaded) {
-    throw new Error(`Job "${prefixMatches[0].id}" record not found.`);
-  }
-  return loaded;
+  return loadJobOrThrow(cwd, prefixMatches[0].id);
 }
 
 export function listJobs(cwd, options = {}) {
-  const state = loadState(cwd);
-  let jobs = state.jobs;
-
-  if (!options.all && options.sessionId !== undefined) {
-    jobs = jobs.filter((j) => j.sessionId === options.sessionId);
-  }
-
+  const jobs = filterJobsBySession(loadState(cwd).jobs, options);
   return jobs.map((j) => ({
     ...j,
-    progressPreview: getJobProgressPreview(cwd, j.id, j.title ?? "")
+    progressPreview: getJobProgressPreview(cwd, j.id)
   }));
 }
