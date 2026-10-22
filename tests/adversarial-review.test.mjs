@@ -648,3 +648,21 @@ test("untracked binary file is listed by path", () => {
   assert.match(res.recordedStdin, /Untracked file \(binary\): binary-data\.bin/);
   assert.ok(!res.recordedStdin.includes("\u0000"), "Binary file bytes must not be dumped into stdin prompt");
 });
+
+test("untracked symlink is listed by path without inlining its target", () => {
+  const repo = initTestRepo();
+  const outside = makeTempDir("mcode-adv-outside-");
+  const secretPath = path.join(outside, "secret.txt");
+  fs.writeFileSync(secretPath, "TOP-SECRET-CONTENT\n", "utf8");
+  fs.symlinkSync(secretPath, path.join(repo, "link.txt"));
+
+  const fixture = path.join(__dirname, "fixtures/adversarial-review-working-tree.stream.jsonl");
+  const res = runCompanion(["adversarial-review"], {
+    cwd: repo,
+    env: { MCODE_FIXTURE: fixture }
+  });
+
+  assert.equal(res.status, 0);
+  assert.match(res.recordedStdin, /Untracked file \(symlink\): link\.txt/);
+  assert.ok(!res.recordedStdin.includes("TOP-SECRET-CONTENT"), "Symlink targets must not be inlined into the prompt");
+});

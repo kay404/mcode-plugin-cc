@@ -56,10 +56,7 @@ export const ADVERSARIAL_REVIEW_OPTION_CONFIG = {
 export function splitSubcommandArgs(rawArgs) {
   const result = [];
   for (const arg of rawArgs) {
-    if (typeof arg === "string") {
-      const parts = arg.trim().split(/\s+/).filter(Boolean);
-      result.push(...parts);
-    }
+    result.push(...arg.trim().split(/\s+/).filter(Boolean));
   }
   return result;
 }

@@ -756,6 +756,11 @@ function collectWorkingTreeChanges(workspaceRoot) {
   for (const relPath of untrackedFiles) {
     const fullPath = path.resolve(workspaceRoot, relPath);
     try {
+      // Symlinks can point outside the workspace; never send their target's content.
+      if (fs.lstatSync(fullPath).isSymbolicLink()) {
+        untrackedEntries.push({ path: relPath, isSymlink: true });
+        continue;
+      }
       const buf = fs.readFileSync(fullPath);
       if (isBinary(buf)) {
         untrackedEntries.push({ path: relPath, isBinary: true });
@@ -786,6 +791,8 @@ function collectWorkingTreeChanges(workspaceRoot) {
     for (const u of untrackedEntries) {
       if (u.content !== undefined) {
         parts.push(`=== Untracked file: ${u.path} ===\n${u.content.trim()}`);
+      } else if (u.isSymlink) {
+        parts.push(`Untracked file (symlink): ${u.path}`);
       } else if (u.isBinary) {
         parts.push(`Untracked file (binary): ${u.path}`);
       } else if (u.isOversized) {
