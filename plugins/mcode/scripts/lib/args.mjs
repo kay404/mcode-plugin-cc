@@ -3,11 +3,24 @@ export const DELEGATE_OPTION_CONFIG = {
   booleanOptions: ["read-only", "full", "json"]
 };
 
+export const STATUS_OPTION_CONFIG = {
+  valueOptions: [],
+  booleanOptions: ["all", "json"],
+  supportedHint: "--all, --json"
+};
+
+export const RESULT_OPTION_CONFIG = {
+  valueOptions: [],
+  booleanOptions: ["all", "json"],
+  supportedHint: "--all, --json"
+};
+
 const SUPPORTED_OPTIONS_HINT = "--read-only, --full, --model <value>, --effort <value>, --json";
 
 export function parseArgs(argv, config = {}) {
   const valueOptions = new Set(config.valueOptions ?? []);
   const booleanOptions = new Set(config.booleanOptions ?? []);
+  const supportedHint = config.supportedHint ?? SUPPORTED_OPTIONS_HINT;
   const options = {};
   const positionals = [];
   let passthrough = false;
@@ -50,7 +63,7 @@ export function parseArgs(argv, config = {}) {
         continue;
       }
 
-      throw new Error(`Unsupported option: --${rawKey}. Supported options: ${SUPPORTED_OPTIONS_HINT}`);
+      throw new Error(`Unsupported option: --${rawKey}. Supported options: ${supportedHint}`);
     }
 
     const shortKey = token.slice(1);
@@ -70,7 +83,7 @@ export function parseArgs(argv, config = {}) {
       continue;
     }
 
-    throw new Error(`Unsupported option: -${shortKey}. Supported options: ${SUPPORTED_OPTIONS_HINT}`);
+    throw new Error(`Unsupported option: -${shortKey}. Supported options: ${supportedHint}`);
   }
 
   return { options, positionals };
