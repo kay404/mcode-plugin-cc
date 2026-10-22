@@ -32,16 +32,92 @@ export function renderDelegationResult(job) {
   return `${reasonConfig.heading}\n\n${err}${sessionFooter}\n`;
 }
 
+export function formatAge(dateStr, now = Date.now()) {
+  const ts = new Date(dateStr).getTime();
+  if (Number.isNaN(ts)) return "-";
+  const diffSec = Math.max(0, Math.floor((now - ts) / 1000));
+  if (diffSec < 60) return `${diffSec}s`;
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}m`;
+  const diffHours = Math.floor(diffMin / 60);
+  if (diffHours < 24) return `${diffHours}h`;
+  const diffDays = Math.floor(diffHours / 24);
+  return `${diffDays}d`;
+}
+
+export function renderStatusTable(jobs) {
+  if (jobs.length === 0) {
+    return "No Jobs found.\n";
+  }
+
+  const headers = ["ID", "KIND", "STATE", "AGE", "PROGRESS"];
+  const rows = jobs.map((job) => [
+    job.id,
+    job.kind,
+    job.reason ? `${job.status} (${job.reason})` : job.status,
+    formatAge(job.createdAt),
+    job.progressPreview || "-"
+  ]);
+
+  const colWidths = headers.map((h, i) =>
+    Math.max(h.length, ...rows.map((r) => (r[i] || "").length))
+  );
+
+  const formatRow = (cols) =>
+    cols.map((col, i) => (col || "").padEnd(colWidths[i])).join("  ").trimEnd();
+
+  const lines = [
+    formatRow(headers),
+    formatRow(colWidths.map((w) => "-".repeat(w))),
+    ...rows.map((row) => formatRow(row))
+  ];
+
+  return lines.join("\n") + "\n";
+}
+
+export function renderJobDetail(job, progressLines = []) {
+  const lines = [
+    `Job ID:         ${job.id}`,
+    `Kind:           ${job.kind}`,
+    `State:          ${job.status}${job.reason ? ` (${job.reason})` : ""}`,
+    `Title:          ${job.title || job.prompt || "-"}`,
+    `Claude session: ${job.sessionId || "-"}`,
+    `mcode session:  ${job.mcodeSessionId ? job.mcodeSessionId : "-"}`
+  ];
+
+  if (job.processId) {
+    lines.push(`Process ID:     ${job.processId}`);
+  }
+
+  lines.push(`Created:        ${job.createdAt}`);
+  lines.push(`Updated:        ${job.updatedAt}`);
+
+  lines.push("");
+  lines.push("Recent progress:");
+  if (progressLines.length === 0) {
+    lines.push("  (no progress recorded)");
+  } else {
+    for (const line of progressLines) {
+      lines.push(`  ${line}`);
+    }
+  }
+
+  return lines.join("\n") + "\n";
+}
+
 export function buildJobJsonPayload(job) {
   return {
     id: job.id,
     kind: job.kind,
+    title: job.title ?? job.prompt ?? null,
     status: job.status,
     reason: job.reason ?? null,
     prompt: job.prompt,
     sessionId: job.sessionId ?? null,
     mcodeSessionId: job.mcodeSessionId ?? null,
+    processId: job.processId ?? null,
     output: job.output ?? null,
+    renderedOutput: job.renderedOutput ?? null,
     error: job.error ?? null,
     usage: job.usage ?? null,
     createdAt: job.createdAt,

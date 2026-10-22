@@ -95,6 +95,7 @@ export function saveJob(cwd, job) {
   const indexEntry = {
     id: job.id,
     kind: job.kind,
+    title: job.title ?? job.prompt ?? null,
     status: job.status,
     reason: job.reason ?? null,
     sessionId: job.sessionId ?? null,
@@ -135,4 +136,106 @@ export function appendJobLog(cwd, jobId, line) {
   fs.mkdirSync(jobsDir, { recursive: true });
   const logFile = resolveJobLogFile(cwd, jobId);
   fs.appendFileSync(logFile, `[${new Date().toISOString()}] ${line}\n`, "utf8");
+}
+
+export function loadJob(cwd, jobId) {
+  const jobFile = resolveJobFile(cwd, jobId);
+  if (!fs.existsSync(jobFile)) {
+    return null;
+  }
+  try {
+    return JSON.parse(fs.readFileSync(jobFile, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+export function readJobLogs(cwd, jobId, maxLines = 10) {
+  const logFile = resolveJobLogFile(cwd, jobId);
+  if (!fs.existsSync(logFile)) {
+    return [];
+  }
+  try {
+    const content = fs.readFileSync(logFile, "utf8");
+    const lines = content.split("\n").filter((line) => line.trim().length > 0);
+    return lines.slice(-maxLines);
+  } catch {
+    return [];
+  }
+}
+
+export function getJobProgressPreview(cwd, jobId, fallback = "") {
+  const lines = readJobLogs(cwd, jobId, 1);
+  if (lines.length > 0) {
+    const raw = lines[0];
+    const match = raw.match(/^\[[^\]]+\]\s*(.*)$/);
+    return match ? match[1] : raw;
+  }
+  return fallback;
+}
+
+export function findJob(cwd, selector, options = {}) {
+  const state = loadState(cwd);
+  let candidates = state.jobs;
+
+  if (!options.all && options.sessionId !== undefined) {
+    candidates = candidates.filter((j) => j.sessionId === options.sessionId);
+  }
+
+  if (options.finishedOnly) {
+    candidates = candidates.filter((j) => j.status === "completed" || j.status === "failed" || j.status === "cancelled");
+  }
+
+  if (!selector) {
+    if (options.defaultLatestFinished) {
+      if (candidates.length === 0) {
+        throw new Error("No finished Jobs found for this session.");
+      }
+      const loaded = loadJob(cwd, candidates[0].id);
+      if (!loaded) {
+        throw new Error(`Job "${candidates[0].id}" record not found.`);
+      }
+      return loaded;
+    }
+    return null;
+  }
+
+  const exactMatch = candidates.find((j) => j.id === selector);
+  if (exactMatch) {
+    const loaded = loadJob(cwd, exactMatch.id);
+    if (!loaded) {
+      throw new Error(`Job "${exactMatch.id}" record not found.`);
+    }
+    return loaded;
+  }
+
+  const prefixMatches = candidates.filter((j) => j.id.startsWith(selector));
+  if (prefixMatches.length === 0) {
+    throw new Error(`No Job found matching "${selector}".`);
+  }
+
+  if (prefixMatches.length > 1) {
+    const candidateList = prefixMatches.map((j) => `  ${j.id}`).join("\n");
+    throw new Error(`Ambiguous Job ID prefix "${selector}". Matching Jobs:\n${candidateList}`);
+  }
+
+  const loaded = loadJob(cwd, prefixMatches[0].id);
+  if (!loaded) {
+    throw new Error(`Job "${prefixMatches[0].id}" record not found.`);
+  }
+  return loaded;
+}
+
+export function listJobs(cwd, options = {}) {
+  const state = loadState(cwd);
+  let jobs = state.jobs;
+
+  if (!options.all && options.sessionId !== undefined) {
+    jobs = jobs.filter((j) => j.sessionId === options.sessionId);
+  }
+
+  return jobs.map((j) => ({
+    ...j,
+    progressPreview: getJobProgressPreview(cwd, j.id, j.title ?? "")
+  }));
 }

@@ -36,6 +36,7 @@ function runCompanion(args, options = {}) {
     PATH: options.noMcodeOnPath ? `${nodeDir}:/usr/bin:/bin` : `${binDir}:${process.env.PATH}`,
     CLAUDE_PLUGIN_DATA: pluginDataDir,
     CLAUDE_SESSION_ID: "test-claude-session-001",
+    MCODE_CLAUDE_SESSION_ID: "test-claude-session-001",
     MCODE_RECORD_ARGV: recordArgvFile,
     MCODE_RECORD_CWD: recordCwdFile,
     MCODE_RECORD_STDIN: recordStdinFile,
