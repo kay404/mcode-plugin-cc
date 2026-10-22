@@ -41,7 +41,7 @@ export function runCompanion(args, options = {}) {
   const pluginDataDir = options.pluginDataDir ?? makeTempDir("mcode-test-data-");
   const binDir = makeTempDir("mcode-test-bin-");
 
-  if (!options.noMcodeOnPath && !options.useRealMcode) {
+  if (!options.noMcodeOnPath) {
     const symlinkPath = path.join(binDir, "mcode");
     try {
       fs.symlinkSync(FAKE_MCODE, symlinkPath);
@@ -56,11 +56,7 @@ export function runCompanion(args, options = {}) {
   const recordStdinFile = path.join(pluginDataDir, "recorded-stdin.txt");
 
   const nodeDir = path.dirname(process.execPath);
-  const pathEnv = options.useRealMcode
-    ? process.env.PATH
-    : options.noMcodeOnPath
-      ? `${nodeDir}:/usr/bin:/bin`
-      : `${binDir}:${process.env.PATH}`;
+  const pathEnv = options.noMcodeOnPath ? `${nodeDir}:/usr/bin:/bin` : `${binDir}:${process.env.PATH}`;
 
   const combinedEnv = {
     ...process.env,

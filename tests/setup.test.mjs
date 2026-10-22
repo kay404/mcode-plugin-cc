@@ -171,21 +171,3 @@ test("setup rejects unsupported options with clear hint", () => {
   assert.ok(res.stderr.includes("Unsupported option: --unknown-flag"));
   assert.ok(res.stderr.includes("Supported options: --json"));
 });
-
-test("setup verifies against real mcode on this machine", () => {
-  const res = runCompanion(["setup"], { useRealMcode: true });
-
-  assert.equal(res.status, 0);
-  assert.ok(res.stdout.includes("Verdict: ready"));
-  assert.ok(res.stdout.includes("mcode version: 0.6.12"));
-  assert.ok(res.stdout.includes("custom_provider:magpie (verified)"));
-  assert.ok(res.stdout.includes("minimax_oauth (unverified: login not checked)"));
-
-  const resJson = runCompanion(["setup", "--json"], { useRealMcode: true });
-  assert.equal(resJson.status, 0);
-  const parsed = JSON.parse(resJson.stdout);
-  assert.equal(parsed.verdict, "ready");
-  assert.equal(parsed.mcodeVersion, "0.6.12");
-  assert.ok(parsed.activeProviders.some((p) => p.providerId === "custom_provider:magpie" && p.state === "verified"));
-  assert.ok(parsed.activeProviders.some((p) => p.providerId === "minimax_oauth" && p.state === "unverified: login not checked"));
-});
