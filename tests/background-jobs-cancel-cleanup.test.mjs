@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
@@ -27,6 +27,9 @@ function runSessionEndHook(stdinJson, env = {}) {
     PATH: `${nodeDir}:/usr/bin:/bin`,
     ...env
   };
+  if (!("MCODE_PLUGIN_DATA" in env)) {
+    delete combinedEnv.MCODE_PLUGIN_DATA;
+  }
 
   const result = spawnSync(process.execPath, [SESSION_END_HOOK], {
     env: combinedEnv,
@@ -238,7 +241,7 @@ test("status --wait rejects invalid --timeout-ms value", () => {
   assert.ok(waitRes.stderr.includes("--timeout-ms must be a non-negative number"));
 });
 
-test("status --wait --timeout-ms reports timeout when Job does not finish, leaving Job untouched", () => {
+test("status --wait --timeout-ms reports timeout when Job does not finish, leaving Job untouched", (t) => {
   const pluginDataDir = makeTempDir("mcode-test-wait-timeout-");
 
   const bgRes = runCompanion(["delegate", "--background", "--json", "slow job"], {
@@ -251,6 +254,10 @@ test("status --wait --timeout-ms reports timeout when Job does not finish, leavi
   assert.equal(bgRes.status, 0);
   const bgJob = JSON.parse(bgRes.stdout);
 
+  t.after(() => {
+    runCompanion(["cancel", bgJob.id], { pluginDataDir });
+  });
+
   const waitRes = runCompanion(["status", bgJob.id, "--wait", "--timeout-ms", "100"], {
     pluginDataDir
   });
@@ -262,6 +269,8 @@ test("status --wait --timeout-ms reports timeout when Job does not finish, leavi
   assert.equal(statusRes.status, 0);
   const currentJob = JSON.parse(statusRes.stdout);
   assert.ok(currentJob.status === "running" || currentJob.status === "queued");
+
+  runCompanion(["cancel", bgJob.id], { pluginDataDir });
 });
 
 test("cancel terminates running worker and its child mcode process group", () => {
@@ -322,18 +331,42 @@ test("cancel terminates running worker and its child mcode process group", () =>
   assert.ok(resultRes.stdout.includes("mcode delegation was cancelled."));
 });
 
-test("cancel resolves job ID by unique prefix", () => {
+test("cancel resolves job ID by unique prefix", (t) => {
   const pluginDataDir = makeTempDir("mcode-test-cancel-prefix-");
+  const mcodePidFile = path.join(pluginDataDir, "mcode.pid");
 
   const bgRes = runCompanion(["delegate", "--background", "--json", "task prefix cancel"], {
     pluginDataDir,
     env: {
+      MCODE_RECORD_PID: mcodePidFile,
       MCODE_SLEEP_MS: "10000",
       MCODE_FIXTURE: path.join(FIXTURES_DIR, "success.stream.jsonl")
     }
   });
   assert.equal(bgRes.status, 0);
   const bgJob = JSON.parse(bgRes.stdout);
+
+  let workerPid = null;
+  const start = Date.now();
+  while (Date.now() - start < 5000) {
+    const statusRes = runCompanion(["status", bgJob.id, "--json"], { pluginDataDir });
+    if (statusRes.status === 0) {
+      const job = JSON.parse(statusRes.stdout);
+      if (job.status === "running" && job.processId) {
+        workerPid = job.processId;
+        break;
+      }
+    }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+  }
+  assert.ok(workerPid);
+
+  t.after(() => {
+    if (workerPid) {
+      try { process.kill(-workerPid, "SIGKILL"); } catch {}
+      try { process.kill(workerPid, "SIGKILL"); } catch {}
+    }
+  });
 
   // Use unique prefix
   const prefix = bgJob.id.slice(0, 16);
@@ -342,14 +375,17 @@ test("cancel resolves job ID by unique prefix", () => {
   const parsed = JSON.parse(cancelRes.stdout);
   assert.equal(parsed.id, bgJob.id);
   assert.equal(parsed.status, "cancelled");
+  assert.equal(isPidAlive(workerPid), false);
 });
 
-test("cancel with no job-id cancels the newest active Job of the session", () => {
+test("cancel with no job-id cancels the newest active Job of the session", (t) => {
   const pluginDataDir = makeTempDir("mcode-test-cancel-default-");
+  const mcodePidFile = path.join(pluginDataDir, "mcode.pid");
 
   const bgRes = runCompanion(["delegate", "--background", "--json", "task to cancel default"], {
     pluginDataDir,
     env: {
+      MCODE_RECORD_PID: mcodePidFile,
       MCODE_SLEEP_MS: "10000",
       MCODE_FIXTURE: path.join(FIXTURES_DIR, "success.stream.jsonl")
     }
@@ -357,11 +393,34 @@ test("cancel with no job-id cancels the newest active Job of the session", () =>
   assert.equal(bgRes.status, 0);
   const bgJob = JSON.parse(bgRes.stdout);
 
+  let workerPid = null;
+  const start = Date.now();
+  while (Date.now() - start < 5000) {
+    const statusRes = runCompanion(["status", bgJob.id, "--json"], { pluginDataDir });
+    if (statusRes.status === 0) {
+      const job = JSON.parse(statusRes.stdout);
+      if (job.status === "running" && job.processId) {
+        workerPid = job.processId;
+        break;
+      }
+    }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+  }
+  assert.ok(workerPid);
+
+  t.after(() => {
+    if (workerPid) {
+      try { process.kill(-workerPid, "SIGKILL"); } catch {}
+      try { process.kill(workerPid, "SIGKILL"); } catch {}
+    }
+  });
+
   const cancelRes = runCompanion(["cancel", "--json"], { pluginDataDir });
   assert.equal(cancelRes.status, 0);
   const parsed = JSON.parse(cancelRes.stdout);
   assert.equal(parsed.id, bgJob.id);
   assert.equal(parsed.status, "cancelled");
+  assert.equal(isPidAlive(workerPid), false);
 });
 
 test("cancel reports error when no running or queued jobs exist", () => {
@@ -487,7 +546,7 @@ test("SessionEnd hook terminates session's running Jobs and cleans up records wh
 
   const endRes = runSessionEndHook(
     { session_id: sessionA },
-    { MCODE_PLUGIN_DATA: pluginDataDir, MCODE_CLAUDE_SESSION_ID: sessionA }
+    { CLAUDE_PLUGIN_DATA: pluginDataDir }
   );
   assert.equal(endRes.status, 0);
 
@@ -514,4 +573,243 @@ test("SessionEnd hook terminates session's running Jobs and cleans up records wh
 
   assert.equal(fs.existsSync(path.join(jobsDir, `${jobB.id}.json`)), true);
   assert.equal(fs.existsSync(path.join(jobsDir, `${jobB.id}.log`)), true);
+
+  if (workerPidB) {
+    try { process.kill(-workerPidB, "SIGKILL"); } catch {}
+    try { process.kill(workerPidB, "SIGKILL"); } catch {}
+  }
+  if (mcodePidB) {
+    try { process.kill(mcodePidB, "SIGKILL"); } catch {}
+  }
+});
+
+test("delegate --background from a subdirectory preserves invocation cwd and worker runs mcode with that cwd", () => {
+  const pluginDataDir = makeTempDir("mcode-test-bg-subfolder-");
+  const subDir = path.join(ROOT_DIR, "plugins/mcode");
+  const recordArgvFile = path.join(pluginDataDir, "worker-argv.json");
+
+  const res = runCompanion(["delegate", "--background", "--json", "bg task in subfolder"], {
+    cwd: subDir,
+    pluginDataDir,
+    env: {
+      MCODE_RECORD_ARGV: recordArgvFile,
+      MCODE_FIXTURE: path.join(FIXTURES_DIR, "success.stream.jsonl")
+    }
+  });
+
+  assert.equal(res.status, 0);
+  const parsed = JSON.parse(res.stdout);
+  assert.equal(parsed.status, "queued");
+  assert.equal(parsed.cwd, subDir);
+
+  let finishedJob = null;
+  const start = Date.now();
+  while (Date.now() - start < 5000) {
+    const statusRes = runCompanion(["status", parsed.id, "--json"], { pluginDataDir });
+    if (statusRes.status === 0) {
+      const job = JSON.parse(statusRes.stdout);
+      if (job.status === "completed") {
+        finishedJob = job;
+        break;
+      }
+    }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+  }
+
+  assert.ok(finishedJob, "Worker should complete the job");
+  assert.equal(finishedJob.cwd, subDir);
+
+  assert.ok(fs.existsSync(recordArgvFile));
+  const workerArgv = JSON.parse(fs.readFileSync(recordArgvFile, "utf8"));
+  const cwdIndex = workerArgv.indexOf("--cwd");
+  assert.ok(cwdIndex >= 0);
+  assert.equal(workerArgv[cwdIndex + 1], subDir);
+});
+
+test("cancelling a queued Job before its worker starts causes worker to exit without running", () => {
+  const pluginDataDir = makeTempDir("mcode-test-queued-cancel-");
+  const mcodePidFile = path.join(pluginDataDir, "mcode.pid");
+
+  // Create an initial completed delegation to initialize state directory
+  const initRes = runCompanion(["delegate", "--json", "initial task"], {
+    pluginDataDir,
+    env: { MCODE_FIXTURE: path.join(FIXTURES_DIR, "success.stream.jsonl") }
+  });
+  assert.equal(initRes.status, 0);
+
+  // Directly set up a queued job in the store (as in resume.test.mjs)
+  const stateDir = path.join(pluginDataDir, "state", fs.readdirSync(path.join(pluginDataDir, "state"))[0]);
+  const stateFile = path.join(stateDir, "state.json");
+  const state = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+  const queuedJob = {
+    id: "delegate-queued-cancel-test",
+    kind: "delegate",
+    title: "task cancelled while queued",
+    prompt: "task cancelled while queued",
+    cwd: ROOT_DIR,
+    workspace: ROOT_DIR,
+    status: "queued",
+    sessionId: "test-claude-session-001",
+    processId: null,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  state.jobs.unshift({
+    id: queuedJob.id,
+    kind: queuedJob.kind,
+    title: queuedJob.title,
+    status: queuedJob.status,
+    sessionId: queuedJob.sessionId,
+    createdAt: queuedJob.createdAt,
+    updatedAt: queuedJob.updatedAt
+  });
+  fs.writeFileSync(stateFile, JSON.stringify(state, null, 2), "utf8");
+  fs.writeFileSync(path.join(stateDir, "jobs", `${queuedJob.id}.json`), JSON.stringify(queuedJob, null, 2), "utf8");
+
+  // Cancel the queued Job before any worker starts
+  const cancelRes = runCompanion(["cancel", queuedJob.id, "--json"], { pluginDataDir });
+  assert.equal(cancelRes.status, 0);
+
+  // Now invoke delegate-worker; it must exit without flipping status or running mcode
+  const workerRes = runCompanion(["delegate-worker", "--job-id", queuedJob.id], {
+    pluginDataDir,
+    env: {
+      MCODE_RECORD_PID: mcodePidFile,
+      MCODE_FIXTURE: path.join(FIXTURES_DIR, "success.stream.jsonl")
+    }
+  });
+  assert.equal(workerRes.status, 0);
+
+  // Fake mcode was never invoked
+  assert.equal(fs.existsSync(mcodePidFile), false);
+
+  // Job status remains cancelled
+  const statusRes = runCompanion(["status", queuedJob.id, "--json"], { pluginDataDir });
+  assert.equal(statusRes.status, 0);
+  const finalJob = JSON.parse(statusRes.stdout);
+  assert.equal(finalJob.status, "cancelled");
+});
+
+test("cancel on foreground Job terminates companion and child mcode without orphaning", async (t) => {
+  const pluginDataDir = makeTempDir("mcode-test-cancel-fg-");
+  const mcodePidFile = path.join(pluginDataDir, "mcode.pid");
+
+  const binDir = makeTempDir("mcode-test-bin-fg-");
+  const symlinkPath = path.join(binDir, "mcode");
+  try {
+    fs.symlinkSync(path.join(ROOT_DIR, "tests/helpers/fake-mcode.mjs"), symlinkPath);
+  } catch {
+    fs.copyFileSync(path.join(ROOT_DIR, "tests/helpers/fake-mcode.mjs"), symlinkPath);
+    fs.chmodSync(symlinkPath, 0o755);
+  }
+
+  const COMPANION_SCRIPT = path.join(ROOT_DIR, "plugins/mcode/scripts/mcode-companion.mjs");
+
+  const foregroundProc = spawn(process.execPath, [COMPANION_SCRIPT, "delegate", "--json", "foreground task to cancel"], {
+    cwd: ROOT_DIR,
+    env: {
+      ...process.env,
+      PATH: `${binDir}:${process.env.PATH}`,
+      MCODE_PLUGIN_DATA: pluginDataDir,
+      MCODE_CLAUDE_SESSION_ID: "test-fg-session",
+      MCODE_RECORD_PID: mcodePidFile,
+      MCODE_SLEEP_MS: "15000",
+      MCODE_FIXTURE: path.join(FIXTURES_DIR, "success.stream.jsonl")
+    },
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+
+  let companionExited = false;
+  foregroundProc.on("exit", () => {
+    companionExited = true;
+  });
+
+  const companionPid = foregroundProc.pid;
+  let mcodePid = null;
+
+  t.after(() => {
+    if (companionPid) {
+      try { process.kill(companionPid, "SIGKILL"); } catch {}
+    }
+    if (mcodePid) {
+      try { process.kill(mcodePid, "SIGKILL"); } catch {}
+    }
+  });
+
+  const start = Date.now();
+  while (Date.now() - start < 5000) {
+    if (fs.existsSync(mcodePidFile)) {
+      mcodePid = parseInt(fs.readFileSync(mcodePidFile, "utf8").trim(), 10);
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+
+  assert.ok(companionPid, "Foreground companion PID should exist");
+  assert.ok(mcodePid, "Foreground mcode PID should exist");
+  assert.ok(!companionExited, "Companion should be alive");
+  assert.ok(isPidAlive(mcodePid), "mcode child should be alive");
+
+  const cancelRes = runCompanion(["cancel", "--json"], {
+    pluginDataDir,
+    sessionId: "test-fg-session"
+  });
+  assert.equal(cancelRes.status, 0);
+
+  const termStart = Date.now();
+  while (Date.now() - termStart < 3000) {
+    if (companionExited && !isPidAlive(mcodePid)) {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+
+  assert.equal(companionExited, true, "Foreground companion must be terminated");
+  assert.equal(isPidAlive(mcodePid), false, "Child mcode must be terminated");
+});
+
+test("delegate --background honours --resume and worker passes --session to mcode", () => {
+  const pluginDataDir = makeTempDir("mcode-test-bg-resume-");
+  const recordArgvFile = path.join(pluginDataDir, "worker-argv.json");
+
+  const firstRes = runCompanion(["delegate", "--json", "first step"], {
+    pluginDataDir,
+    env: { MCODE_FIXTURE: path.join(FIXTURES_DIR, "success.stream.jsonl") }
+  });
+  assert.equal(firstRes.status, 0);
+  const firstJob = JSON.parse(firstRes.stdout);
+  assert.ok(firstJob.mcodeSessionId);
+
+  const bgRes = runCompanion(["delegate", "--background", "--resume", "--json", "resumed background step"], {
+    pluginDataDir,
+    env: {
+      MCODE_RECORD_ARGV: recordArgvFile,
+      MCODE_FIXTURE: path.join(FIXTURES_DIR, "success.stream.jsonl")
+    }
+  });
+  assert.equal(bgRes.status, 0);
+  const bgJob = JSON.parse(bgRes.stdout);
+  assert.equal(bgJob.status, "queued");
+  assert.equal(bgJob.mcodeSessionId, firstJob.mcodeSessionId);
+
+  let finishedJob = null;
+  const start = Date.now();
+  while (Date.now() - start < 5000) {
+    const statusRes = runCompanion(["status", bgJob.id, "--json"], { pluginDataDir });
+    if (statusRes.status === 0) {
+      const job = JSON.parse(statusRes.stdout);
+      if (job.status === "completed") {
+        finishedJob = job;
+        break;
+      }
+    }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+  }
+
+  assert.ok(finishedJob, "Worker should complete the resumed job");
+  assert.ok(fs.existsSync(recordArgvFile));
+  const workerArgv = JSON.parse(fs.readFileSync(recordArgvFile, "utf8"));
+  const sessionIndex = workerArgv.indexOf("--session");
+  assert.ok(sessionIndex >= 0);
+  assert.equal(workerArgv[sessionIndex + 1], firstJob.mcodeSessionId);
 });

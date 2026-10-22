@@ -8,6 +8,7 @@ import {
   DELEGATE_OPTION_CONFIG,
   DELEGATE_WORKER_OPTION_CONFIG,
   SETUP_OPTION_CONFIG,
+  RESUME_CANDIDATE_OPTION_CONFIG,
   STATUS_OPTION_CONFIG,
   RESULT_OPTION_CONFIG,
   CANCEL_OPTION_CONFIG
@@ -23,6 +24,8 @@ import {
   findLatestJob,
   findLatestActiveJob,
   findLatestFinishedJob,
+  findResumeCandidate,
+  findActiveDelegation,
   terminateJobProcess,
   appendJobLog,
   resolveWorkspaceRoot,
@@ -33,7 +36,8 @@ import {
   renderDelegationResult,
   renderStatusTable,
   renderJobDetail,
-  buildJobJsonPayload
+  buildJobJsonPayload,
+  formatAge
 } from "./lib/render.mjs";
 import { runSetupChecks, renderSetupResult } from "./lib/setup.mjs";
 import { captureWorkspaceSnapshot, evaluateWorkspaceGuard } from "./lib/workspace-guard.mjs";
@@ -43,7 +47,8 @@ const SESSION_ID_ENV = "MCODE_CLAUDE_SESSION_ID";
 function printUsage() {
   console.log([
     "Usage:",
-    "  node scripts/mcode-companion.mjs delegate [--read-only] [--full] [--model <model>] [--effort <effort>] [--json] <task>",
+    "  node scripts/mcode-companion.mjs delegate [--read-only] [--full] [--resume] [--fresh] [--model <model>] [--effort <effort>] [--json] <task>",
+    "  node scripts/mcode-companion.mjs resume-candidate [--json]",
     "  node scripts/mcode-companion.mjs setup [--json]",
     "  node scripts/mcode-companion.mjs status [job-id] [--all] [--json]",
     "  node scripts/mcode-companion.mjs result [job-id] [--all] [--json]",
@@ -70,6 +75,7 @@ async function executeDelegation(job, workspaceRoot, invocationCwd, onProgress =
       permission: job.permission,
       model: job.model,
       effort: job.effort,
+      session: job.mcodeSessionId || undefined,
       prompt: mcodePrompt,
       onProgress
     });
@@ -129,6 +135,11 @@ async function handleDelegate(rawTokens) {
 
   const { options, positionals } = parsed;
 
+  if (options.resume && options.fresh) {
+    console.error("Error: Cannot combine --resume and --fresh (they are mutually exclusive).");
+    process.exit(1);
+  }
+
   const prompt = positionals.join(" ").trim();
   if (!prompt) {
     console.error("Error: Task prompt is required for delegation.");
@@ -140,6 +151,25 @@ async function handleDelegate(rawTokens) {
 
   const invocationCwd = process.cwd();
   const workspaceRoot = resolveWorkspaceRoot(invocationCwd);
+  const currentSessionId = process.env[SESSION_ID_ENV] || null;
+
+  let targetMcodeSessionId = null;
+  if (options.resume) {
+    const activeDelegation = findActiveDelegation(workspaceRoot, { sessionId: currentSessionId });
+    if (activeDelegation) {
+      console.error(`Error: Cannot resume while a delegation in this Claude session is ${activeDelegation.status} (Job ${activeDelegation.id}).`);
+      process.exit(1);
+    }
+
+    const candidate = findResumeCandidate(workspaceRoot, { sessionId: currentSessionId });
+    if (!candidate) {
+      console.error("Error: No resumable mcode session found for this Claude session.");
+      process.exit(1);
+    }
+
+    targetMcodeSessionId = candidate.mcodeSessionId;
+  }
+
   const jobId = generateJobId("delegate");
   const createdAt = new Date().toISOString();
 
@@ -150,14 +180,15 @@ async function handleDelegate(rawTokens) {
     kind: "delegate",
     title: prompt,
     prompt,
+    cwd: invocationCwd,
     workspace: workspaceRoot,
-    sessionId: process.env[SESSION_ID_ENV] || null,
+    sessionId: currentSessionId,
     processId: isBackground ? null : process.pid,
     readOnly,
     permission,
     model: options.model || null,
     effort: options.effort || null,
-    mcodeSessionId: null,
+    mcodeSessionId: targetMcodeSessionId || null,
     status: isBackground ? "queued" : "running",
     reason: null,
     output: null,
@@ -241,14 +272,67 @@ async function handleDelegateWorker(rawTokens) {
   const workspaceRoot = resolveWorkspaceRoot(process.cwd());
   const job = loadJobOrThrow(workspaceRoot, jobId);
 
+  if (job.status !== "queued") {
+    return;
+  }
+
   job.status = "running";
   job.processId = process.pid;
   saveJob(workspaceRoot, job);
   appendJobLog(workspaceRoot, jobId, `Worker started with PID ${process.pid}`);
 
-  await executeDelegation(job, workspaceRoot, job.workspace, (line) => {
+  const invocationCwd = job.cwd || job.workspace;
+  await executeDelegation(job, workspaceRoot, invocationCwd, (line) => {
     appendJobLog(workspaceRoot, jobId, line);
   });
+}
+
+async function handleResumeCandidate(rawTokens) {
+  let parsed;
+  try {
+    const tokens = splitSubcommandArgs(rawTokens);
+    parsed = parseArgs(tokens, RESUME_CANDIDATE_OPTION_CONFIG);
+  } catch (err) {
+    console.error(`Error: ${err.message}`);
+    process.exit(1);
+  }
+
+  const nonWhitespacePositionals = parsed.positionals.filter((p) => p.trim());
+  if (nonWhitespacePositionals.length > 0) {
+    console.error(`Unexpected argument: "${nonWhitespacePositionals[0]}". resume-candidate takes no positional arguments.`);
+    process.exit(1);
+  }
+
+  const workspaceRoot = resolveWorkspaceRoot(process.cwd());
+  const currentSessionId = process.env[SESSION_ID_ENV] || null;
+  const candidate = findResumeCandidate(workspaceRoot, { sessionId: currentSessionId });
+
+  if (parsed.options.json) {
+    if (!candidate) {
+      console.log(JSON.stringify({
+        hasCandidate: false,
+        jobId: null,
+        mcodeSessionId: null,
+        title: null,
+        age: null
+      }, null, 2));
+    } else {
+      const age = formatAge(candidate.createdAt);
+      console.log(JSON.stringify({
+        hasCandidate: true,
+        jobId: candidate.id,
+        mcodeSessionId: candidate.mcodeSessionId,
+        title: candidate.title,
+        age
+      }, null, 2));
+    }
+  } else {
+    if (!candidate) {
+      console.log("No resume candidate found.");
+    } else {
+      console.log(`Resume candidate: ${candidate.id} (${candidate.mcodeSessionId})\n  Title: ${candidate.title}\n  Age: ${formatAge(candidate.createdAt)}`);
+    }
+  }
 }
 
 async function handleSetup(rawTokens) {
@@ -298,7 +382,7 @@ async function handleStatus(rawTokens) {
 
   const shouldWait = Boolean(options.wait || options["timeout-ms"] !== undefined);
   if (shouldWait) {
-    const timeoutMs = options["timeout-ms"] !== undefined ? parseInt(options["timeout-ms"], 10) : Infinity;
+    const timeoutMs = options["timeout-ms"] !== undefined ? parseInt(options["timeout-ms"], 10) : 240000;
     if (options["timeout-ms"] !== undefined && (Number.isNaN(timeoutMs) || timeoutMs < 0)) {
       console.error("Error: --timeout-ms must be a non-negative number.");
       process.exit(1);
@@ -329,7 +413,7 @@ async function handleStatus(rawTokens) {
         console.error(`Error: Timed out waiting for Job ${currentJob.id} to finish.`);
         process.exit(1);
       }
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await new Promise((resolve) => setTimeout(resolve, 500));
       currentJob = loadJobOrThrow(workspaceRoot, job.id);
     }
 
@@ -497,6 +581,11 @@ async function main() {
 
   if (subcommand === "delegate-worker") {
     await handleDelegateWorker(argv.slice(1));
+    return;
+  }
+
+  if (subcommand === "resume-candidate") {
+    await handleResumeCandidate(argv.slice(1));
     return;
   }
 

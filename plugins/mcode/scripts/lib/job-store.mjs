@@ -25,7 +25,7 @@ export function resolveWorkspaceRoot(cwd = process.cwd()) {
   }
 }
 
-export function resolveStateDir(cwd = process.cwd()) {
+export function resolveStateDir(cwd = process.cwd(), options = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   let canonicalRoot = workspaceRoot;
   try {
@@ -37,21 +37,21 @@ export function resolveStateDir(cwd = process.cwd()) {
   const slugSource = path.basename(workspaceRoot) || "workspace";
   const slug = slugSource.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "workspace";
   const hash = createHash("sha256").update(canonicalRoot).digest("hex").slice(0, 16);
-  const pluginDataDir = process.env[PLUGIN_DATA_ENV];
+  const pluginDataDir = options.pluginDataDir ?? process.env[PLUGIN_DATA_ENV];
   const stateRoot = pluginDataDir ? path.join(pluginDataDir, "state") : FALLBACK_STATE_ROOT_DIR;
   return path.join(stateRoot, `${slug}-${hash}`);
 }
 
-export function resolveJobsDir(cwd = process.cwd()) {
-  return path.join(resolveStateDir(cwd), "jobs");
+export function resolveJobsDir(cwd = process.cwd(), options = {}) {
+  return path.join(resolveStateDir(cwd, options), "jobs");
 }
 
-export function resolveJobFile(cwd, jobId) {
-  return path.join(resolveJobsDir(cwd), `${jobId}.json`);
+export function resolveJobFile(cwd, jobId, options = {}) {
+  return path.join(resolveJobsDir(cwd, options), `${jobId}.json`);
 }
 
-export function resolveJobLogFile(cwd, jobId) {
-  return path.join(resolveJobsDir(cwd), `${jobId}.log`);
+export function resolveJobLogFile(cwd, jobId, options = {}) {
+  return path.join(resolveJobsDir(cwd, options), `${jobId}.log`);
 }
 
 function defaultState() {
@@ -67,8 +67,8 @@ export function generateJobId(kind) {
   return `${kind}-${timestamp}-${randomSuffix}`;
 }
 
-export function loadState(cwd = process.cwd()) {
-  const stateFile = path.join(resolveStateDir(cwd), "state.json");
+export function loadState(cwd = process.cwd(), options = {}) {
+  const stateFile = path.join(resolveStateDir(cwd, options), "state.json");
   if (!fs.existsSync(stateFile)) {
     return defaultState();
   }
@@ -84,15 +84,15 @@ export function loadState(cwd = process.cwd()) {
   }
 }
 
-export function saveJob(cwd, job) {
-  const jobsDir = resolveJobsDir(cwd);
+export function saveJob(cwd, job, options = {}) {
+  const jobsDir = resolveJobsDir(cwd, options);
   fs.mkdirSync(jobsDir, { recursive: true });
 
-  const jobFile = resolveJobFile(cwd, job.id);
+  const jobFile = resolveJobFile(cwd, job.id, options);
   job.updatedAt = new Date().toISOString();
   fs.writeFileSync(jobFile, JSON.stringify(job, null, 2), "utf8");
 
-  const state = loadState(cwd);
+  const state = loadState(cwd, options);
   const existingIndex = state.jobs.findIndex((j) => j.id === job.id);
   const indexEntry = {
     id: job.id,
@@ -118,8 +118,8 @@ export function saveJob(cwd, job) {
     const pruned = state.jobs.slice(MAX_JOBS);
     state.jobs = state.jobs.slice(0, MAX_JOBS);
     for (const item of pruned) {
-      const prunedFile = resolveJobFile(cwd, item.id);
-      const prunedLog = resolveJobLogFile(cwd, item.id);
+      const prunedFile = resolveJobFile(cwd, item.id, options);
+      const prunedLog = resolveJobLogFile(cwd, item.id, options);
       if (fs.existsSync(prunedFile)) {
         fs.unlinkSync(prunedFile);
       }
@@ -129,7 +129,7 @@ export function saveJob(cwd, job) {
     }
   }
 
-  const stateFile = path.join(resolveStateDir(cwd), "state.json");
+  const stateFile = path.join(resolveStateDir(cwd, options), "state.json");
   fs.writeFileSync(stateFile, JSON.stringify(state, null, 2), "utf8");
 }
 
@@ -140,8 +140,8 @@ export function appendJobLog(cwd, jobId, line) {
   fs.appendFileSync(logFile, `[${new Date().toISOString()}] ${line}\n`, "utf8");
 }
 
-export function loadJob(cwd, jobId) {
-  const jobFile = resolveJobFile(cwd, jobId);
+export function loadJob(cwd, jobId, options = {}) {
+  const jobFile = resolveJobFile(cwd, jobId, options);
   if (!fs.existsSync(jobFile)) {
     return null;
   }
@@ -152,8 +152,8 @@ export function loadJob(cwd, jobId) {
   }
 }
 
-export function loadJobOrThrow(cwd, jobId) {
-  const job = loadJob(cwd, jobId);
+export function loadJobOrThrow(cwd, jobId, options = {}) {
+  const job = loadJob(cwd, jobId, options);
   if (!job) {
     throw new Error(`Job "${jobId}" record not found.`);
   }
@@ -186,10 +186,12 @@ export function getJobProgressPreview(cwd, jobId) {
   return "-";
 }
 
-export function cleanupSessionJobs(cwd, sessionId) {
+export function cleanupSessionJobs(cwd, sessionId, options = {}) {
   if (!sessionId) return;
 
-  const state = loadState(cwd);
+  const storeOpts = { pluginDataDir: options.pluginDataDir };
+
+  const state = loadState(cwd, storeOpts);
   const jobsToKeep = [];
   const jobsToRemove = [];
 
@@ -202,14 +204,14 @@ export function cleanupSessionJobs(cwd, sessionId) {
   }
 
   for (const item of jobsToRemove) {
-    const job = loadJob(cwd, item.id);
+    const job = loadJob(cwd, item.id, storeOpts);
     if (job && !FINISHED_STATUSES.has(job.status)) {
       if (job.processId) {
         terminateJobProcess(job.processId);
       }
     }
-    const jobFile = resolveJobFile(cwd, item.id);
-    const logFile = resolveJobLogFile(cwd, item.id);
+    const jobFile = resolveJobFile(cwd, item.id, storeOpts);
+    const logFile = resolveJobLogFile(cwd, item.id, storeOpts);
     if (fs.existsSync(jobFile)) {
       try {
         fs.unlinkSync(jobFile);
@@ -223,7 +225,7 @@ export function cleanupSessionJobs(cwd, sessionId) {
   }
 
   state.jobs = jobsToKeep;
-  const stateDir = resolveStateDir(cwd);
+  const stateDir = resolveStateDir(cwd, storeOpts);
   const stateFile = path.join(stateDir, "state.json");
   if (fs.existsSync(stateDir)) {
     fs.writeFileSync(stateFile, JSON.stringify(state, null, 2), "utf8");
@@ -258,32 +260,30 @@ export function terminateJobProcess(pid, { graceMs = 200 } = {}) {
   if (!pid || typeof pid !== "number") return;
 
   function sendSignal(signal) {
+    let sent = false;
     try {
       process.kill(-pid, signal);
-      return true;
-    } catch (err) {
-      if (err.code === "ESRCH") return false;
-      try {
-        process.kill(pid, signal);
-        return true;
-      } catch {
-        return false;
-      }
-    }
+      sent = true;
+    } catch {}
+
+    try {
+      process.kill(pid, signal);
+      sent = true;
+    } catch {}
+
+    return sent;
   }
 
   function isAlive() {
     try {
       process.kill(-pid, 0);
       return true;
-    } catch {
-      try {
-        process.kill(pid, 0);
-        return true;
-      } catch {
-        return false;
-      }
-    }
+    } catch {}
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {}
+    return false;
   }
 
   if (!sendSignal("SIGTERM")) {
@@ -308,6 +308,28 @@ export function findLatestFinishedJob(cwd, options = {}) {
     throw new Error("No finished Jobs found for this session.");
   }
   return loadJobOrThrow(cwd, finished.id);
+}
+
+export function findResumeCandidate(cwd, options = {}) {
+  const candidates = filterJobsBySession(loadState(cwd).jobs, options);
+  const match = candidates.find(
+    (j) => j.kind === "delegate" && FINISHED_STATUSES.has(j.status) && Boolean(j.mcodeSessionId)
+  );
+  if (!match) {
+    return null;
+  }
+  return loadJobOrThrow(cwd, match.id);
+}
+
+export function findActiveDelegation(cwd, options = {}) {
+  const candidates = filterJobsBySession(loadState(cwd).jobs, options);
+  const match = candidates.find(
+    (j) => j.kind === "delegate" && (j.status === "running" || j.status === "queued")
+  );
+  if (!match) {
+    return null;
+  }
+  return loadJobOrThrow(cwd, match.id);
 }
 
 export function findJob(cwd, selector, options = {}) {

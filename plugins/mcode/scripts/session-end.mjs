@@ -14,7 +14,7 @@ function readStdin() {
 
 function main() {
   const input = readStdin();
-  let sessionId = process.env.MCODE_CLAUDE_SESSION_ID || null;
+  let sessionId = null;
   if (input.trim()) {
     try {
       const parsed = JSON.parse(input);
@@ -31,7 +31,8 @@ function main() {
   }
 
   const workspaceRoot = resolveWorkspaceRoot(process.cwd());
-  cleanupSessionJobs(workspaceRoot, sessionId);
+  const pluginDataDir = process.env.CLAUDE_PLUGIN_DATA;
+  cleanupSessionJobs(workspaceRoot, sessionId, { pluginDataDir });
 }
 
 main();

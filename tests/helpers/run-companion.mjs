@@ -23,9 +23,16 @@ export function makeTempDir(prefix) {
 export function cleanupTempDirs() {
   while (tempDirsToClean.length > 0) {
     const dir = tempDirsToClean.pop();
-    try {
-      fs.rmSync(dir, { recursive: true, force: true });
-    } catch {}
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try {
+        if (fs.existsSync(dir)) {
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
+        break;
+      } catch {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+      }
+    }
   }
 }
 

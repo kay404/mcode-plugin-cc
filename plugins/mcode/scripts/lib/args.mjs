@@ -1,7 +1,7 @@
 export const DELEGATE_OPTION_CONFIG = {
   valueOptions: ["model", "effort"],
-  booleanOptions: ["read-only", "full", "background", "json"],
-  supportedHint: "--read-only, --full, --model <value>, --effort <value>, --background, --json"
+  booleanOptions: ["read-only", "full", "resume", "fresh", "background", "json"],
+  supportedHint: "--read-only, --full, --resume, --fresh, --model <value>, --effort <value>, --background, --json"
 };
 
 export const DELEGATE_WORKER_OPTION_CONFIG = {
@@ -11,6 +11,12 @@ export const DELEGATE_WORKER_OPTION_CONFIG = {
 };
 
 export const SETUP_OPTION_CONFIG = {
+  valueOptions: [],
+  booleanOptions: ["json"],
+  supportedHint: "--json"
+};
+
+export const RESUME_CANDIDATE_OPTION_CONFIG = {
   valueOptions: [],
   booleanOptions: ["json"],
   supportedHint: "--json"
