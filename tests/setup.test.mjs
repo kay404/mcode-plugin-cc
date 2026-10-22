@@ -43,7 +43,7 @@ test("setup reports ready (login unverified) when only OAuth provider is active"
 
   assert.equal(res.status, 0);
   assert.ok(res.stdout.includes("Verdict: ready (login unverified)"));
-  assert.ok(res.stdout.includes("minimax_oauth (unverified (login not checked))"));
+  assert.ok(res.stdout.includes("minimax_oauth (unverified: login not checked)"));
   assert.ok(res.stdout.includes("! mcode login"));
 
   const resJson = runCompanion(["setup", "--json"], {
@@ -55,7 +55,7 @@ test("setup reports ready (login unverified) when only OAuth provider is active"
   const parsed = JSON.parse(resJson.stdout);
   assert.equal(parsed.verdict, "ready (login unverified)");
   assert.equal(parsed.activeProviders[0].providerId, "minimax_oauth");
-  assert.equal(parsed.activeProviders[0].state, "unverified (login not checked)");
+  assert.equal(parsed.activeProviders[0].state, "unverified: login not checked");
   assert.ok(parsed.nextStep.includes("! mcode login"));
 });
 
@@ -68,7 +68,7 @@ test("setup reports ready and all active providers when both key and OAuth are a
 
   assert.equal(res.status, 0);
   assert.ok(res.stdout.includes("Verdict: ready"));
-  assert.ok(res.stdout.includes("minimax_oauth (unverified (login not checked))"));
+  assert.ok(res.stdout.includes("minimax_oauth (unverified: login not checked)"));
   assert.ok(res.stdout.includes("custom_provider:magpie (verified)"));
 
   const resJson = runCompanion(["setup", "--json"], {
@@ -82,7 +82,7 @@ test("setup reports ready and all active providers when both key and OAuth are a
   assert.equal(parsed.activeProviders.length, 2);
   const oauth = parsed.activeProviders.find((p) => p.providerId === "minimax_oauth");
   const magpie = parsed.activeProviders.find((p) => p.providerId === "custom_provider:magpie");
-  assert.equal(oauth.state, "unverified (login not checked)");
+  assert.equal(oauth.state, "unverified: login not checked");
   assert.equal(magpie.state, "verified");
 });
 
@@ -179,7 +179,7 @@ test("setup verifies against real mcode on this machine", () => {
   assert.ok(res.stdout.includes("Verdict: ready"));
   assert.ok(res.stdout.includes("mcode version: 0.6.12"));
   assert.ok(res.stdout.includes("custom_provider:magpie (verified)"));
-  assert.ok(res.stdout.includes("minimax_oauth (unverified (login not checked))"));
+  assert.ok(res.stdout.includes("minimax_oauth (unverified: login not checked)"));
 
   const resJson = runCompanion(["setup", "--json"], { useRealMcode: true });
   assert.equal(resJson.status, 0);
@@ -187,5 +187,5 @@ test("setup verifies against real mcode on this machine", () => {
   assert.equal(parsed.verdict, "ready");
   assert.equal(parsed.mcodeVersion, "0.6.12");
   assert.ok(parsed.activeProviders.some((p) => p.providerId === "custom_provider:magpie" && p.state === "verified"));
-  assert.ok(parsed.activeProviders.some((p) => p.providerId === "minimax_oauth" && p.state === "unverified (login not checked)"));
+  assert.ok(parsed.activeProviders.some((p) => p.providerId === "minimax_oauth" && p.state === "unverified: login not checked"));
 });

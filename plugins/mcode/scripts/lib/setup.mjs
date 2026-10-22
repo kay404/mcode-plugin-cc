@@ -69,9 +69,9 @@ export function checkProvider() {
       if (p.hasApiKey) {
         state = "verified";
       } else if (p.kind === "minimax-oauth") {
-        state = "unverified (login not checked)";
+        state = "unverified: login not checked";
       } else {
-        state = "unverified (no api key)";
+        state = "unverified: no API key";
       }
       activeProviders.push({
         providerId: p.providerId,
@@ -82,7 +82,7 @@ export function checkProvider() {
   }
 
   const hasVerified = activeProviders.some((p) => p.state === "verified");
-  const hasUnverifiedOauth = activeProviders.some((p) => p.state === "unverified (login not checked)");
+  const hasUnverifiedOauth = activeProviders.some((p) => p.state === "unverified: login not checked");
 
   let verdict;
   let nextStep = null;
