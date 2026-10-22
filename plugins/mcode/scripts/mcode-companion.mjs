@@ -63,7 +63,6 @@ async function handleDelegate(rawTokens) {
     output: null,
     error: null,
     usage: null,
-    readOnlyViolation: null,
     readOnlyGuard: null,
     createdAt,
     updatedAt: createdAt
@@ -100,24 +99,14 @@ async function handleDelegate(rawTokens) {
   }
 
   if (readOnly) {
-    const guardResult = evaluateWorkspaceGuard(snapshotBefore, workspaceRoot);
-    if (guardResult.violation) {
-      job.readOnlyViolation = {
-        changedPaths: guardResult.changedPaths,
-        paths: guardResult.changedPaths
-      };
+    job.readOnlyGuard = evaluateWorkspaceGuard(snapshotBefore, workspaceRoot);
+    if (job.readOnlyGuard.changedPaths.length > 0 || job.readOnlyGuard.headMoved || job.readOnlyGuard.stashChanged) {
       appendJobLog(
         workspaceRoot,
         jobId,
-        `Read-only violation detected: ${guardResult.changedPaths.join(", ")}`
+        `Read-only violation detected: ${job.readOnlyGuard.changedPaths.join(", ")}`
       );
     }
-    job.readOnlyGuard = {
-      checked: guardResult.checked,
-      reason: guardResult.reason,
-      violation: guardResult.violation,
-      changedPaths: guardResult.changedPaths
-    };
   }
 
   job.status = outcome.status;

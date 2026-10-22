@@ -3,6 +3,11 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+export const GUARD_REASONS = {
+  "not-a-git-repo": "Read-only check could not run: not a git repository.",
+  "git-status-failed": "Read-only check could not run: git status failed."
+};
+
 export function isGitWorkspace(workspaceRoot) {
   try {
     const stdout = execFileSync("git", ["-C", workspaceRoot, "rev-parse", "--is-inside-work-tree"], {
@@ -12,6 +17,18 @@ export function isGitWorkspace(workspaceRoot) {
     return stdout.trim() === "true";
   } catch {
     return false;
+  }
+}
+
+function getGitRef(workspaceRoot, args) {
+  try {
+    const stdout = execFileSync("git", ["-C", workspaceRoot, ...args], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"]
+    });
+    return stdout.trim() || null;
+  } catch {
+    return null;
   }
 }
 
@@ -28,13 +45,9 @@ function parseGitStatusZ(buffer) {
 
     if (code.includes("R") || code.includes("C")) {
       const origNulIdx = buffer.indexOf(0, i);
-      if (origNulIdx !== -1) {
-        const origPath = buffer.subarray(i, origNulIdx).toString("utf8");
-        i = origNulIdx + 1;
-        entries.push({ code, path: p, origPath });
-      } else {
-        entries.push({ code, path: p });
-      }
+      const origPath = buffer.subarray(i, origNulIdx).toString("utf8");
+      i = origNulIdx + 1;
+      entries.push({ code, path: p, origPath });
     } else {
       entries.push({ code, path: p });
     }
@@ -42,75 +55,73 @@ function parseGitStatusZ(buffer) {
   return entries;
 }
 
-function hashWorkspacePath(workspaceRoot, relPath) {
+function fingerprintWorkspacePath(workspaceRoot, relPath) {
   const fullPath = path.resolve(workspaceRoot, relPath);
   try {
     const lstat = fs.lstatSync(fullPath);
+    const mode = lstat.mode;
     if (lstat.isSymbolicLink()) {
-      return createHash("sha256").update(fs.readlinkSync(fullPath)).digest("hex");
+      return {
+        mode,
+        hash: createHash("sha256").update(fs.readlinkSync(fullPath)).digest("hex")
+      };
     }
     if (lstat.isDirectory()) {
-      return "directory";
+      return { mode, hash: "directory" };
     }
-    return createHash("sha256").update(fs.readFileSync(fullPath)).digest("hex");
+    return {
+      mode,
+      hash: createHash("sha256").update(fs.readFileSync(fullPath)).digest("hex")
+    };
   } catch {
-    return null;
+    return { mode: null, hash: null };
   }
 }
 
 export function captureWorkspaceSnapshot(workspaceRoot) {
   if (!isGitWorkspace(workspaceRoot)) {
-    return { isGit: false, files: {} };
+    return { isGit: false, reason: "not-a-git-repo", files: {} };
   }
 
+  // debt: writes to gitignored paths such as .env or build output are not detected; scanning ignored files is unbounded.
   let statusBuffer;
   try {
     statusBuffer = execFileSync("git", ["-C", workspaceRoot, "status", "--porcelain=v1", "-z", "-uall"], {
       stdio: ["ignore", "pipe", "ignore"]
     });
   } catch {
-    return { isGit: false, files: {} };
+    return { isGit: true, reason: "git-status-failed", files: {} };
   }
 
+  const head = getGitRef(workspaceRoot, ["rev-parse", "HEAD"]);
+  const stash = getGitRef(workspaceRoot, ["rev-parse", "--verify", "-q", "refs/stash"]);
   const entries = parseGitStatusZ(statusBuffer);
   const files = {};
 
   for (const entry of entries) {
-    files[entry.path] = {
-      code: entry.code,
-      hash: hashWorkspacePath(workspaceRoot, entry.path)
-    };
+    const fp = fingerprintWorkspacePath(workspaceRoot, entry.path);
+    files[entry.path] = { code: entry.code, ...fp };
     if (entry.origPath) {
-      files[entry.origPath] = {
-        code: entry.code,
-        hash: hashWorkspacePath(workspaceRoot, entry.origPath)
-      };
+      const origFp = fingerprintWorkspacePath(workspaceRoot, entry.origPath);
+      files[entry.origPath] = { code: entry.code, ...origFp };
     }
   }
 
-  return { isGit: true, files };
+  return { isGit: true, head, stash, files };
 }
 
 export function evaluateWorkspaceGuard(snapshotBefore, workspaceRoot) {
-  if (!snapshotBefore || !snapshotBefore.isGit || !isGitWorkspace(workspaceRoot)) {
-    return {
-      checked: false,
-      reason: "not-a-git-repo",
-      message: "Read-only check could not run: not a git repository.",
-      violation: false,
-      changedPaths: []
-    };
+  if (!snapshotBefore.isGit) {
+    return { checked: false, reason: snapshotBefore.reason, changedPaths: [] };
+  }
+
+  if (snapshotBefore.reason) {
+    return { checked: false, reason: snapshotBefore.reason, changedPaths: [] };
   }
 
   const snapshotAfter = captureWorkspaceSnapshot(workspaceRoot);
-  if (!snapshotAfter.isGit) {
-    return {
-      checked: false,
-      reason: "not-a-git-repo",
-      message: "Read-only check could not run: not a git repository.",
-      violation: false,
-      changedPaths: []
-    };
+  if (!snapshotAfter.isGit || snapshotAfter.reason) {
+    return { checked: false, reason: snapshotAfter.reason ?? "not-a-git-repo", changedPaths: [] };
   }
 
   const allPaths = new Set([
@@ -123,19 +134,28 @@ export function evaluateWorkspaceGuard(snapshotBefore, workspaceRoot) {
     const b = snapshotBefore.files[p];
     const a = snapshotAfter.files[p];
 
-    if (!b || !a) {
-      changed.push(p);
-    } else if (b.code !== a.code || b.hash !== a.hash) {
+    if (!b || !a || b.code !== a.code || b.hash !== a.hash || b.mode !== a.mode) {
       changed.push(p);
     }
   }
 
   changed.sort();
 
-  return {
+  const outcome = {
     checked: true,
     reason: null,
-    violation: changed.length > 0,
     changedPaths: changed
   };
+
+  if (snapshotBefore.head && snapshotAfter.head && snapshotBefore.head !== snapshotAfter.head) {
+    outcome.headMoved = { from: snapshotBefore.head, to: snapshotAfter.head };
+  } else if (!snapshotBefore.head && snapshotAfter.head) {
+    outcome.headMoved = { from: "none", to: snapshotAfter.head };
+  }
+
+  if (snapshotBefore.stash !== snapshotAfter.stash) {
+    outcome.stashChanged = true;
+  }
+
+  return outcome;
 }

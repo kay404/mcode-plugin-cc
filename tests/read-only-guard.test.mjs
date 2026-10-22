@@ -1,16 +1,10 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT_DIR = path.resolve(__dirname, "..");
-const COMPANION_SCRIPT = path.join(ROOT_DIR, "plugins/mcode/scripts/mcode-companion.mjs");
-const FAKE_MCODE = path.join(ROOT_DIR, "tests/helpers/fake-mcode.mjs");
-const FIXTURES_DIR = path.join(ROOT_DIR, "tests/fixtures");
+import { runCompanion } from "./helpers/run-companion.mjs";
 
 function initTestRepo() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mcode-guard-test-"));
@@ -23,45 +17,14 @@ function initTestRepo() {
   return dir;
 }
 
-function runCompanionInRepo(repoDir, args, options = {}) {
-  const pluginDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcode-test-data-"));
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcode-test-bin-"));
-
-  const symlinkPath = path.join(binDir, "mcode");
-  try {
-    fs.symlinkSync(FAKE_MCODE, symlinkPath);
-  } catch {
-    fs.copyFileSync(FAKE_MCODE, symlinkPath);
-    fs.chmodSync(symlinkPath, 0o755);
-  }
-
-  const combinedEnv = {
-    ...process.env,
-    PATH: `${binDir}:${process.env.PATH}`,
-    CLAUDE_PLUGIN_DATA: pluginDataDir,
-    CLAUDE_SESSION_ID: "test-guard-session-001",
-    MCODE_FIXTURE: path.join(FIXTURES_DIR, "success.stream.jsonl"),
-    ...(options.env ?? {})
-  };
-
-  const result = spawnSync(process.execPath, [COMPANION_SCRIPT, ...args], {
-    cwd: repoDir,
-    env: combinedEnv,
-    encoding: "utf8"
-  });
-
-  const status = result.status ?? 1;
-  const stdout = result.stdout ?? "";
-  const stderr = result.stderr ?? "";
-
-  return { status, stdout, stderr, pluginDataDir };
-}
-
 test("read-only delegation detects modified file, renders violation first, and does not revert changes", () => {
   const repo = initTestRepo();
-  const res = runCompanionInRepo(repo, ["delegate", "--read-only", "inspect code"], {
+  const res = runCompanion(["delegate", "--read-only", "inspect code"], {
+    cwd: repo,
     env: {
-      MCODE_MODIFY_FILE: "tracked.txt:unexpected modification\n"
+      MCODE_MUTATIONS: JSON.stringify([
+        { action: "modify", path: "tracked.txt", content: "unexpected modification\n" }
+      ])
     }
   });
 
@@ -82,9 +45,12 @@ test("read-only delegation detects modified file, renders violation first, and d
 
 test("read-only delegation detects newly created file and renders violation first", () => {
   const repo = initTestRepo();
-  const res = runCompanionInRepo(repo, ["delegate", "--read-only", "inspect code"], {
+  const res = runCompanion(["delegate", "--read-only", "inspect code"], {
+    cwd: repo,
     env: {
-      MCODE_CREATE_FILE: "created.txt:new file content\n"
+      MCODE_MUTATIONS: JSON.stringify([
+        { action: "create", path: "created.txt", content: "new file content\n" }
+      ])
     }
   });
 
@@ -98,9 +64,12 @@ test("read-only delegation detects newly created file and renders violation firs
 
 test("read-only delegation detects deleted file and renders violation first", () => {
   const repo = initTestRepo();
-  const res = runCompanionInRepo(repo, ["delegate", "--read-only", "inspect code"], {
+  const res = runCompanion(["delegate", "--read-only", "inspect code"], {
+    cwd: repo,
     env: {
-      MCODE_DELETE_FILE: "tracked.txt"
+      MCODE_MUTATIONS: JSON.stringify([
+        { action: "delete", path: "tracked.txt" }
+      ])
     }
   });
 
@@ -114,7 +83,7 @@ test("pre-existing uncommitted changes that mcode did not touch are not reported
   const repo = initTestRepo();
   fs.writeFileSync(path.join(repo, "dirty-preexisting.txt"), "pre-existing dirty content\n", "utf8");
 
-  const res = runCompanionInRepo(repo, ["delegate", "--read-only", "clean inspection"]);
+  const res = runCompanion(["delegate", "--read-only", "clean inspection"], { cwd: repo });
 
   assert.equal(res.status, 0);
   assert.ok(!res.stdout.includes("Read-only violation"));
@@ -126,9 +95,12 @@ test("further edits to an already-dirty file are reported as violations", () => 
   const repo = initTestRepo();
   fs.writeFileSync(path.join(repo, "dirty-file.txt"), "pre-existing content\n", "utf8");
 
-  const res = runCompanionInRepo(repo, ["delegate", "--read-only", "modify dirty file"], {
+  const res = runCompanion(["delegate", "--read-only", "modify dirty file"], {
+    cwd: repo,
     env: {
-      MCODE_MODIFY_FILE: "dirty-file.txt:further edits by mcode\n"
+      MCODE_MUTATIONS: JSON.stringify([
+        { action: "modify", path: "dirty-file.txt", content: "further edits by mcode\n" }
+      ])
     }
   });
 
@@ -137,9 +109,78 @@ test("further edits to an already-dirty file are reported as violations", () => 
   assert.ok(res.stdout.includes("dirty-file.txt"));
 });
 
+test("read-only delegation detects commit moving HEAD", () => {
+  const repo = initTestRepo();
+  const initialHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+
+  const res = runCompanion(["delegate", "--read-only", "commit in read only"], {
+    cwd: repo,
+    env: {
+      MCODE_MUTATIONS: JSON.stringify([
+        { action: "git", args: ["commit", "--allow-empty", "-m", "commit by mcode"] }
+      ])
+    }
+  });
+
+  assert.equal(res.status, 0);
+  assert.ok(res.stdout.startsWith("Read-only violation: files were modified during a read-only delegation:"));
+  assert.ok(res.stdout.includes(`HEAD moved: ${initialHead} →`));
+});
+
+test("read-only delegation detects git stash change", () => {
+  const repo = initTestRepo();
+
+  const res = runCompanion(["delegate", "--read-only", "stash in read only"], {
+    cwd: repo,
+    env: {
+      MCODE_MUTATIONS: JSON.stringify([
+        { action: "modify", path: "tracked.txt", content: "modified before stash\n" },
+        { action: "git", args: ["stash"] }
+      ])
+    }
+  });
+
+  assert.equal(res.status, 0);
+  assert.ok(res.stdout.startsWith("Read-only violation: files were modified during a read-only delegation:"));
+  assert.ok(res.stdout.includes("stash changed"));
+});
+
+test("read-only delegation detects file mode change on already-dirty file", () => {
+  const repo = initTestRepo();
+  const scriptPath = path.join(repo, "script.sh");
+  fs.writeFileSync(scriptPath, "#!/bin/sh\necho hi\n", { mode: 0o644 });
+
+  const res = runCompanion(["delegate", "--read-only", "chmod script"], {
+    cwd: repo,
+    env: {
+      MCODE_MUTATIONS: JSON.stringify([
+        { action: "chmod", path: "script.sh", mode: 0o755 }
+      ])
+    }
+  });
+
+  assert.equal(res.status, 0);
+  assert.ok(res.stdout.startsWith("Read-only violation: files were modified during a read-only delegation:"));
+  assert.ok(res.stdout.includes("script.sh"));
+});
+
+test("read-only delegation reports git status failed when git status fails inside a git repo", () => {
+  const repo = initTestRepo();
+  fs.writeFileSync(path.join(repo, ".git/index"), "CORRUPT_INDEX");
+
+  const res = runCompanion(["delegate", "--read-only", "broken status test"], { cwd: repo });
+
+  assert.equal(res.status, 0);
+  assert.ok(
+    res.stdout.startsWith("Read-only check could not run: git status failed."),
+    `Expected git status failed notice, got:\n${res.stdout}`
+  );
+  assert.ok(!res.stdout.includes("not a git repository"));
+});
+
 test("read-only delegation outside a git repo completes and reports check could not run", () => {
   const nonGitDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcode-guard-nongit-"));
-  const res = runCompanionInRepo(nonGitDir, ["delegate", "--read-only", "inspect non-git dir"]);
+  const res = runCompanion(["delegate", "--read-only", "inspect non-git dir"], { cwd: nonGitDir });
 
   assert.equal(res.status, 0);
   assert.ok(
@@ -149,27 +190,35 @@ test("read-only delegation outside a git repo completes and reports check could 
   assert.ok(res.stdout.includes("OK"));
 });
 
-test("read-only delegation outputs structured readOnlyViolation in --json mode", () => {
+test("read-only delegation outputs structured readOnlyGuard in --json mode", () => {
   const repo = initTestRepo();
-  const res = runCompanionInRepo(repo, ["delegate", "--read-only", "--json", "inspect code with json"], {
+  const res = runCompanion(["delegate", "--read-only", "--json", "inspect code with json"], {
+    cwd: repo,
     env: {
-      MCODE_CREATE_FILE: "json-created.txt:content\n"
+      MCODE_MUTATIONS: JSON.stringify([
+        { action: "create", path: "json-created.txt", content: "content\n" }
+      ])
     }
   });
 
   assert.equal(res.status, 0);
   const parsed = JSON.parse(res.stdout);
   assert.equal(parsed.status, "completed");
-  assert.ok(parsed.readOnlyViolation);
-  assert.ok(Array.isArray(parsed.readOnlyViolation.changedPaths));
-  assert.ok(parsed.readOnlyViolation.changedPaths.includes("json-created.txt"));
+  assert.ok(parsed.readOnlyGuard);
+  assert.equal(parsed.readOnlyGuard.checked, true);
+  assert.ok(Array.isArray(parsed.readOnlyGuard.changedPaths));
+  assert.ok(parsed.readOnlyGuard.changedPaths.includes("json-created.txt"));
+  assert.equal(parsed.readOnlyViolation, undefined);
 });
 
 test("non-read-only delegation does not trigger read-only violation even if files are modified", () => {
   const repo = initTestRepo();
-  const res = runCompanionInRepo(repo, ["delegate", "write delegation allowed to change files"], {
+  const res = runCompanion(["delegate", "write delegation allowed to change files"], {
+    cwd: repo,
     env: {
-      MCODE_CREATE_FILE: "allowed.txt:allowed content\n"
+      MCODE_MUTATIONS: JSON.stringify([
+        { action: "create", path: "allowed.txt", content: "allowed content\n" }
+      ])
     }
   });
 

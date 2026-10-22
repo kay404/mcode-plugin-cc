@@ -1,14 +1,35 @@
 import { FAILURE_REASONS } from "./failure-reasons.mjs";
+import { GUARD_REASONS } from "./workspace-guard.mjs";
 
-export function renderDelegationResult(job) {
-  let prefix = "";
-  if (job.readOnlyViolation?.changedPaths?.length) {
-    const fileList = job.readOnlyViolation.changedPaths.map((p) => `  - ${p}`).join("\n");
-    prefix = `Read-only violation: files were modified during a read-only delegation:\n${fileList}\n\n`;
-  } else if (job.readOnly && job.readOnlyGuard && !job.readOnlyGuard.checked) {
-    prefix = "Read-only check could not run: not a git repository.\n\n";
+function renderReadOnlyPrefix(guard) {
+  if (!guard) return "";
+
+  if (!guard.checked) {
+    const msg = GUARD_REASONS[guard.reason] ?? "Read-only check could not run.";
+    return `${msg}\n\n`;
   }
 
+  const items = [];
+  if (guard.headMoved) {
+    items.push(`HEAD moved: ${guard.headMoved.from} → ${guard.headMoved.to}`);
+  }
+  if (guard.stashChanged) {
+    items.push("stash changed");
+  }
+  for (const p of guard.changedPaths ?? []) {
+    items.push(p);
+  }
+
+  if (items.length > 0) {
+    const list = items.map((item) => `  - ${item}`).join("\n");
+    return `Read-only violation: files were modified during a read-only delegation:\n${list}\n\n`;
+  }
+
+  return "";
+}
+
+export function renderDelegationResult(job) {
+  const prefix = renderReadOnlyPrefix(job.readOnlyGuard);
   const sessionId = job.mcodeSessionId;
   const sessionFooter = sessionId
     ? `\n\n---\nmcode session: ${sessionId}\nTo open this session in the mcode TUI: mcode --session ${sessionId}`
@@ -41,7 +62,7 @@ export function renderDelegationResult(job) {
 }
 
 export function buildJobJsonPayload(job) {
-  const payload = {
+  return {
     id: job.id,
     kind: job.kind,
     status: job.status,
@@ -52,19 +73,9 @@ export function buildJobJsonPayload(job) {
     output: job.output ?? null,
     error: job.error ?? null,
     usage: job.usage ?? null,
+    readOnly: job.readOnly,
+    readOnlyGuard: job.readOnlyGuard ?? null,
     createdAt: job.createdAt,
     updatedAt: job.updatedAt
   };
-
-  if (job.readOnly !== undefined) {
-    payload.readOnly = job.readOnly;
-  }
-  if (job.readOnlyViolation !== undefined) {
-    payload.readOnlyViolation = job.readOnlyViolation;
-  }
-  if (job.readOnlyGuard !== undefined) {
-    payload.readOnlyGuard = job.readOnlyGuard;
-  }
-
-  return payload;
 }
