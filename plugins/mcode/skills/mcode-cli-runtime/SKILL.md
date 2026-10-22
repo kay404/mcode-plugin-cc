@@ -9,13 +9,15 @@ user-invocable: false
 Use this skill inside the `mcode:mcode-delegate` agent.
 
 Primary helper:
-- `node "${CLAUDE_PLUGIN_ROOT}/scripts/mcode-companion.mjs" delegate [--read-only] [--full] [--model <model>] [--effort <effort>] [--json] "<prompt>"`
+- `node "${CLAUDE_PLUGIN_ROOT}/scripts/mcode-companion.mjs" delegate [--read-only] [--full] [--resume] [--fresh] [--model <model>] [--effort <effort>] [--json] "<prompt>"`
 
 Execution rules:
 - The delegate agent is a thin forwarder, not an orchestrator. Its only job is to invoke `delegate` once and return that stdout unchanged.
 - Prefer the companion helper over direct `mcode` CLI strings or manual subprocess execution.
 - Use `delegate` for diagnosis, research, and implementation requests.
 - Add `--full` only when the user explicitly requests full permission. Add `--read-only` when the user asks for read-only behavior or research without modifications. Do not pass `--permission`.
+- Add `--resume` when the user supplies `--resume` or uses continuation phrasing ("continue", "keep going", "apply the top fix", "dig deeper").
+- Start a fresh session when the user supplies `--fresh`.
 - Leave `--model` and `--effort` unset unless explicitly requested by the user.
 
 Prompt composition guidance:
