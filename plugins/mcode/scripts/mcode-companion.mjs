@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import process from "node:process";
-import { parseArgs, DELEGATE_OPTION_CONFIG } from "./lib/args.mjs";
+import { parseArgs, DELEGATE_OPTION_CONFIG, SETUP_OPTION_CONFIG } from "./lib/args.mjs";
 import {
   generateJobId,
   saveJob,
@@ -10,11 +10,13 @@ import {
 } from "./lib/job-store.mjs";
 import { runMcode, wrapReadOnlyPrompt } from "./lib/mcode-runner.mjs";
 import { renderDelegationResult, buildJobJsonPayload } from "./lib/render.mjs";
+import { runSetupChecks, renderSetupResult } from "./lib/setup.mjs";
 
 function printUsage() {
   console.log([
     "Usage:",
-    "  node scripts/mcode-companion.mjs delegate [--read-only] [--full] [--model <model>] [--effort <effort>] [--json] <task>"
+    "  node scripts/mcode-companion.mjs delegate [--read-only] [--full] [--model <model>] [--effort <effort>] [--json] <task>",
+    "  node scripts/mcode-companion.mjs setup [--json]"
   ].join("\n"));
 }
 
@@ -118,6 +120,34 @@ async function handleDelegate(rawTokens) {
   }
 }
 
+async function handleSetup(rawTokens) {
+  let parsed;
+  try {
+    parsed = parseArgs(rawTokens, SETUP_OPTION_CONFIG);
+  } catch (err) {
+    console.error(`Error: ${err.message}`);
+    process.exit(1);
+  }
+
+  const nonWhitespacePositionals = parsed.positionals.filter((p) => p.trim());
+  if (nonWhitespacePositionals.length > 0) {
+    console.error(`Unexpected argument: "${nonWhitespacePositionals[0]}". setup takes no positional arguments.`);
+    process.exit(1);
+  }
+
+  const result = runSetupChecks();
+
+  if (parsed.options.json) {
+    console.log(JSON.stringify(result, null, 2));
+  } else {
+    process.stdout.write(renderSetupResult(result));
+  }
+
+  if (result.verdict !== "ready") {
+    process.exit(1);
+  }
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   const subcommand = argv[0];
@@ -127,13 +157,19 @@ async function main() {
     process.exit(0);
   }
 
-  if (subcommand !== "delegate") {
-    console.error(`Unknown subcommand: "${subcommand}"`);
-    printUsage();
-    process.exit(1);
+  if (subcommand === "delegate") {
+    await handleDelegate(argv.slice(1));
+    return;
   }
 
-  await handleDelegate(argv.slice(1));
+  if (subcommand === "setup") {
+    await handleSetup(argv.slice(1));
+    return;
+  }
+
+  console.error(`Unknown subcommand: "${subcommand}"`);
+  printUsage();
+  process.exit(1);
 }
 
 main().catch((err) => {
