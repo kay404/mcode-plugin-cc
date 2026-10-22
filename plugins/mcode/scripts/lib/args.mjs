@@ -46,97 +46,28 @@ export const REVIEW_OPTION_CONFIG = {
   supportedHint: "--wait, --background, --json"
 };
 
-export const ADVERSARIAL_REVIEW_SUPPORTED_HINT = "--base <ref>, --plan <path>, --wait, --background, --json";
+export const ADVERSARIAL_REVIEW_OPTION_CONFIG = {
+  valueOptions: ["base", "plan"],
+  booleanOptions: ["wait", "background", "json"],
+  stopAtFirstPositional: true,
+  supportedHint: "--base <ref>, --plan <path>, --wait, --background, --json"
+};
 
 export function splitSubcommandArgs(rawArgs) {
-  if (rawArgs.length === 1) {
-    return rawArgs[0].trim().split(/\s+/).filter(Boolean);
+  const result = [];
+  for (const arg of rawArgs) {
+    if (typeof arg === "string") {
+      const parts = arg.trim().split(/\s+/).filter(Boolean);
+      result.push(...parts);
+    }
   }
-  return rawArgs;
+  return result;
 }
 
-export function parseAdversarialReviewArgs(rawTokens) {
-  const tokens = splitSubcommandArgs(rawTokens);
-  const options = {};
-  let focusTokens = [];
-  let i = 0;
-
-  while (i < tokens.length) {
-    const token = tokens[i];
-
-    if (token === "--") {
-      focusTokens = tokens.slice(i + 1);
-      break;
-    }
-
-    if (!token.startsWith("-") || token === "-") {
-      focusTokens = tokens.slice(i);
-      break;
-    }
-
-    if (token === "--wait") {
-      options.wait = true;
-      i += 1;
-      continue;
-    }
-
-    if (token === "--background") {
-      options.background = true;
-      i += 1;
-      continue;
-    }
-
-    if (token === "--json") {
-      options.json = true;
-      i += 1;
-      continue;
-    }
-
-    if (token === "--base" || token.startsWith("--base=")) {
-      let val;
-      if (token.startsWith("--base=")) {
-        val = token.slice("--base=".length);
-      } else {
-        val = tokens[i + 1];
-        i += 1;
-      }
-      if (val === undefined || val === "") {
-        throw new Error("Missing value for --base");
-      }
-      options.base = val;
-      i += 1;
-      continue;
-    }
-
-    if (token === "--plan" || token.startsWith("--plan=")) {
-      let val;
-      if (token.startsWith("--plan=")) {
-        val = token.slice("--plan=".length);
-      } else {
-        val = tokens[i + 1];
-        i += 1;
-      }
-      if (val === undefined || val === "") {
-        throw new Error("Missing value for --plan");
-      }
-      options.plan = val;
-      i += 1;
-      continue;
-    }
-
-    throw new Error(`Unsupported option: ${token}. Supported options: ${ADVERSARIAL_REVIEW_SUPPORTED_HINT}`);
-  }
-
-  if (options.base && options.plan) {
-    throw new Error("Cannot combine --base and --plan (they are mutually exclusive).");
-  }
-
+export function assertWaitBackgroundExclusive(options) {
   if (options.wait && options.background) {
     throw new Error("Cannot combine --wait and --background (they are mutually exclusive).");
   }
-
-  const focus = focusTokens.join(" ").trim();
-  return { options, focus };
 }
 
 const SUPPORTED_OPTIONS_HINT = "--read-only, --full, --model <value>, --effort <value>, --json";
@@ -145,6 +76,7 @@ export function parseArgs(argv, config = {}) {
   const valueOptions = new Set(config.valueOptions ?? []);
   const booleanOptions = new Set(config.booleanOptions ?? []);
   const supportedHint = config.supportedHint ?? SUPPORTED_OPTIONS_HINT;
+  const stopAtFirstPositional = Boolean(config.stopAtFirstPositional);
   const options = {};
   const positionals = [];
   let passthrough = false;
@@ -164,6 +96,9 @@ export function parseArgs(argv, config = {}) {
 
     if (!token.startsWith("-") || token === "-") {
       positionals.push(token);
+      if (stopAtFirstPositional) {
+        passthrough = true;
+      }
       continue;
     }
 

@@ -31,7 +31,7 @@ export const FAILURE_REASONS = {
     defaultMessage: "The mcode version emitted an unrecognized output stream schema."
   },
   "schema-invalid": {
-    heading: (noun = "adversarial review") => `mcode ${noun} output did not match the required schema.`,
+    heading: (noun) => `mcode ${noun} output did not match the required schema.`,
     defaultMessage: "Structured output did not match the expected schema."
   },
   "error": {

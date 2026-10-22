@@ -96,13 +96,6 @@ const SEVERITY_RANKS = {
 };
 
 function renderAdversarialReviewOutput(output) {
-  if (typeof output === "string") {
-    return output.trim();
-  }
-  if (!output || typeof output !== "object") {
-    return "";
-  }
-
   const lines = [];
 
   if (output.verdict) {
@@ -116,7 +109,7 @@ function renderAdversarialReviewOutput(output) {
 
   if (Array.isArray(output.findings) && output.findings.length > 0) {
     const sorted = [...output.findings].sort(
-      (a, b) => (SEVERITY_RANKS[a.severity] ?? 99) - (SEVERITY_RANKS[b.severity] ?? 99)
+      (a, b) => SEVERITY_RANKS[a.severity] - SEVERITY_RANKS[b.severity]
     );
 
     for (const f of sorted) {

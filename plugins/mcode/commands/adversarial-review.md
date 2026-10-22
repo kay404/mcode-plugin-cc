@@ -55,9 +55,12 @@ Operating rules:
             - Option 2: "Run in background"
           - If the user chooses "Wait for results", run in foreground.
           - If the user chooses "Run in background", run with `--background`.
-- If `--wait` was passed, run in foreground without `--background`.
-- If `--background` was passed, run with `--background`.
-- Run the companion adversarial review command:
+- If `--wait` or `--background` was passed directly in raw arguments, run:
   `node "${CLAUDE_PLUGIN_ROOT}/scripts/mcode-companion.mjs" adversarial-review "$ARGUMENTS"`
+- Otherwise run with the chosen flag before `"$ARGUMENTS"`:
+  - If the user chose "Run in background":
+    `node "${CLAUDE_PLUGIN_ROOT}/scripts/mcode-companion.mjs" adversarial-review --background "$ARGUMENTS"`
+  - If the user chose "Wait for results":
+    `node "${CLAUDE_PLUGIN_ROOT}/scripts/mcode-companion.mjs" adversarial-review --wait "$ARGUMENTS"`
 - Present the companion output above verbatim and in full, without summarising or adding commentary.
 - After presenting adversarial review findings, STOP and ask the user which findings to fix; never auto-fix without explicit user decision.

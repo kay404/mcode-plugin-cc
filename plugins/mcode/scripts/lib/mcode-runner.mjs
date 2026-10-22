@@ -150,7 +150,7 @@ export function mapMcodeResultToOutcome(execResult, stderr = "") {
     return { ...base, reason: "limit-exceeded", error: error ?? { message: FAILURE_REASONS["limit-exceeded"].defaultMessage } };
   }
   if (error?.code === "STRUCTURED_OUTPUT_INVALID") {
-    return { ...base, reason: "schema-invalid", error: error ?? { message: FAILURE_REASONS["schema-invalid"].defaultMessage } };
+    return { ...base, reason: "schema-invalid", error };
   }
   if (isNeedsInteraction(error, stderr)) {
     return { ...base, reason: "needs-interaction", error: error ?? { message: FAILURE_REASONS["needs-interaction"].defaultMessage } };

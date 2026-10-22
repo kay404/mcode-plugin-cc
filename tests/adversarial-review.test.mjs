@@ -517,3 +517,134 @@ test("finished adversarial review Job is never a resume-candidate and running Jo
     runCompanion(["cancel", match[1]], { cwd: repo, pluginDataDir: advRes.pluginDataDir });
   }
 });
+
+test('adversarial-review command invocation with background flag and branch target: ["adversarial-review", "--background", "--base main focus words"]', () => {
+  const repo = initTestRepo();
+  execFileSync("git", ["checkout", "-b", "feature/my-branch"], { cwd: repo });
+  fs.writeFileSync(path.join(repo, "calc.js"), "export function divide(a, b) { return a / b; }\n", "utf8");
+  execFileSync("git", ["add", "."], { cwd: repo });
+  execFileSync("git", ["commit", "-m", "feature commit"], { cwd: repo });
+
+  const fixture = path.join(__dirname, "fixtures/adversarial-review-branch.stream.jsonl");
+  const res = runCompanion(["adversarial-review", "--background", "--base main focus words"], {
+    cwd: repo,
+    env: { MCODE_FIXTURE: fixture }
+  });
+
+  assert.equal(res.status, 0);
+  assert.match(res.stdout, /Job (adversarial-review-[a-z0-9-]+) started in the background\./);
+  const match = res.stdout.match(/Job (adversarial-review-[a-z0-9-]+) started in the background\./);
+  const jobId = match[1];
+
+  const waitRes = runCompanion(["status", jobId, "--wait", "--timeout-ms", "5000"], {
+    cwd: repo,
+    pluginDataDir: res.pluginDataDir
+  });
+  assert.equal(waitRes.status, 0);
+  assert.match(waitRes.stdout, /State:\s+completed/);
+  assert.match(waitRes.stdout, /Kind:\s+adversarial-review/);
+  assert.ok(waitRes.recordedStdin, "Background worker must pass stdin prompt to mcode");
+  assert.match(waitRes.recordedStdin, /focus words/);
+
+  const statusRes = runCompanion(["status", jobId], {
+    cwd: repo,
+    pluginDataDir: res.pluginDataDir
+  });
+  assert.match(statusRes.stdout, /Branch changes compared to base 'main'/);
+});
+
+test('adversarial-review command invocation with background flag and empty arguments: ["adversarial-review", "--background", ""]', () => {
+  const repo = initTestRepo();
+  fs.writeFileSync(path.join(repo, "math.js"), "function add(a, b) { return a - b; }\n", "utf8");
+
+  const fixture = path.join(__dirname, "fixtures/adversarial-review-working-tree.stream.jsonl");
+  const res = runCompanion(["adversarial-review", "--background", ""], {
+    cwd: repo,
+    env: { MCODE_FIXTURE: fixture }
+  });
+
+  assert.equal(res.status, 0);
+  assert.match(res.stdout, /Job (adversarial-review-[a-z0-9-]+) started in the background\./);
+  const match = res.stdout.match(/Job (adversarial-review-[a-z0-9-]+) started in the background\./);
+  const jobId = match[1];
+
+  const waitRes = runCompanion(["status", jobId, "--wait", "--timeout-ms", "5000"], {
+    cwd: repo,
+    pluginDataDir: res.pluginDataDir
+  });
+  assert.equal(waitRes.status, 0);
+  assert.match(waitRes.stdout, /State:\s+completed/);
+});
+
+test('adversarial-review command invocation with background flag and focus: ["adversarial-review", "--background", "check this"]', () => {
+  const repo = initTestRepo();
+  fs.writeFileSync(path.join(repo, "math.js"), "function add(a, b) { return a - b; }\n", "utf8");
+
+  const fixture = path.join(__dirname, "fixtures/adversarial-review-working-tree.stream.jsonl");
+  const res = runCompanion(["adversarial-review", "--background", "check this"], {
+    cwd: repo,
+    env: { MCODE_FIXTURE: fixture }
+  });
+
+  assert.equal(res.status, 0);
+  assert.match(res.stdout, /Job (adversarial-review-[a-z0-9-]+) started in the background\./);
+  const match = res.stdout.match(/Job (adversarial-review-[a-z0-9-]+) started in the background\./);
+  const jobId = match[1];
+
+  const waitRes = runCompanion(["status", jobId, "--wait", "--timeout-ms", "5000"], {
+    cwd: repo,
+    pluginDataDir: res.pluginDataDir
+  });
+  assert.equal(waitRes.status, 0);
+  assert.match(waitRes.stdout, /State:\s+completed/);
+  assert.ok(waitRes.recordedStdin, "Background worker must pass stdin prompt to mcode");
+  assert.match(waitRes.recordedStdin, /check this/);
+});
+
+test("prompt filling preserves special replacement patterns verbatim", () => {
+  const repo = initTestRepo();
+  fs.writeFileSync(path.join(repo, "math.js"), "echo $$ cost $& and $'\n", "utf8");
+
+  const fixture = path.join(__dirname, "fixtures/adversarial-review-working-tree.stream.jsonl");
+  const res = runCompanion(["adversarial-review"], {
+    cwd: repo,
+    env: { MCODE_FIXTURE: fixture }
+  });
+
+  assert.equal(res.status, 0);
+  assert.ok(res.recordedStdin.includes("echo $$ cost $& and $'"), "Special replace patterns must appear verbatim in prompt");
+});
+
+test("untracked file inside a new directory is covered", () => {
+  const repo = initTestRepo();
+  const subDir = path.join(repo, "newdir", "sub");
+  fs.mkdirSync(subDir, { recursive: true });
+  fs.writeFileSync(path.join(subDir, "nested.js"), "export const nested = true;\n", "utf8");
+
+  const fixture = path.join(__dirname, "fixtures/adversarial-review-working-tree.stream.jsonl");
+  const res = runCompanion(["adversarial-review"], {
+    cwd: repo,
+    env: { MCODE_FIXTURE: fixture }
+  });
+
+  assert.equal(res.status, 0);
+  assert.match(res.recordedStdin, /newdir\/sub\/nested\.js/);
+  assert.match(res.recordedStdin, /export const nested = true;/);
+});
+
+test("untracked binary file is listed by path", () => {
+  const repo = initTestRepo();
+  const binPath = path.join(repo, "binary-data.bin");
+  const binBuffer = Buffer.from([0x00, 0x01, 0x02, 0xff, 0xfe]);
+  fs.writeFileSync(binPath, binBuffer);
+
+  const fixture = path.join(__dirname, "fixtures/adversarial-review-working-tree.stream.jsonl");
+  const res = runCompanion(["adversarial-review"], {
+    cwd: repo,
+    env: { MCODE_FIXTURE: fixture }
+  });
+
+  assert.equal(res.status, 0);
+  assert.match(res.recordedStdin, /Untracked file \(binary\): binary-data\.bin/);
+  assert.ok(!res.recordedStdin.includes("\u0000"), "Binary file bytes must not be dumped into stdin prompt");
+});
