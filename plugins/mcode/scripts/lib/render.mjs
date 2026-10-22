@@ -1,7 +1,7 @@
-import { FAILURE_REASONS } from "./failure-reasons.mjs";
+import { FAILURE_REASONS, JOB_KIND_NOUNS, getFailureHeading } from "./failure-reasons.mjs";
 import { GUARD_REASONS } from "./workspace-guard.mjs";
 
-function renderReadOnlyPrefix(guard) {
+function renderReadOnlyPrefix(guard, noun = "delegation") {
   if (!guard) return "";
 
   if (!guard.checked) {
@@ -22,34 +22,95 @@ function renderReadOnlyPrefix(guard) {
 
   if (items.length > 0) {
     const list = items.map((item) => `  - ${item}`).join("\n");
-    return `Read-only violation: files were modified during a read-only delegation:\n${list}\n\n`;
+    return `Read-only violation: files were modified during a read-only ${noun}:\n${list}\n\n`;
   }
 
   return "";
 }
 
+function renderOutput(output) {
+  if (typeof output === "string") {
+    return output.trim();
+  }
+  if (!output || typeof output !== "object") {
+    return "";
+  }
+
+  const hasVerdict = Boolean(output.verdict);
+  const hasSummary = Boolean(output.summary);
+  const hasFindings = Array.isArray(output.findings) && output.findings.length > 0;
+
+  if (!hasVerdict && !hasSummary && !hasFindings) {
+    return JSON.stringify(output, null, 2);
+  }
+
+  const lines = [];
+  if (hasVerdict) {
+    lines.push(`Verdict: ${output.verdict}`);
+  }
+  if (hasSummary) {
+    lines.push(output.summary.trim());
+  }
+  if (hasFindings) {
+    for (const f of output.findings) {
+      const parts = [];
+      const priority = f.priority ? `[${f.priority}] ` : "";
+      const title = f.title || "";
+      if (priority || title) {
+        parts.push(`${priority}${title}`.trim());
+      }
+      const locParts = [];
+      if (f.path) {
+        let loc = f.path;
+        if (f.startLine !== undefined && f.startLine !== null) {
+          loc += `:${f.startLine}`;
+          if (f.endLine !== undefined && f.endLine !== null && f.endLine !== f.startLine) {
+            loc += `-${f.endLine}`;
+          }
+        }
+        locParts.push(loc);
+      }
+      if (f.side) {
+        locParts.push(`(${f.side})`);
+      }
+      if (locParts.length > 0) {
+        parts.push(locParts.join(" "));
+      }
+      if (f.content) {
+        parts.push(f.content.trim());
+      }
+      if (parts.length > 0) {
+        lines.push("");
+        lines.push(parts.join("\n"));
+      }
+    }
+  }
+  return lines.join("\n").trim();
+}
+
 export function renderDelegationResult(job) {
-  const prefix = renderReadOnlyPrefix(job.readOnlyGuard);
+  const noun = JOB_KIND_NOUNS[job.kind] ?? "delegation";
+  const prefix = renderReadOnlyPrefix(job.readOnlyGuard, noun);
   const sessionId = job.mcodeSessionId;
   const sessionFooter = sessionId
     ? `\n\n---\nmcode session: ${sessionId}\nTo open this session in the mcode TUI: mcode --session ${sessionId}`
     : "";
 
   if (job.status === "completed") {
-    const rawOutput = (job.output ?? "").trim();
+    const rawOutput = renderOutput(job.output);
     return `${prefix}${rawOutput}${sessionFooter}\n`;
   }
 
   if (job.status === "cancelled") {
-    return `${prefix}mcode delegation was cancelled.${sessionFooter}\n`;
+    return `${prefix}mcode ${noun} was cancelled.${sessionFooter}\n`;
   }
 
-  const reasonConfig = FAILURE_REASONS[job.reason] ?? FAILURE_REASONS.error;
+  const heading = getFailureHeading(job.reason, noun);
 
   if (job.reason === "needs-interaction") {
     const command = sessionId ? `mcode --session ${sessionId}` : "mcode";
     return prefix + [
-      reasonConfig.heading,
+      heading,
       "",
       "To continue this session interactively, run:",
       `  ${command}`,
@@ -57,8 +118,9 @@ export function renderDelegationResult(job) {
     ].filter(Boolean).join("\n") + "\n";
   }
 
+  const reasonConfig = FAILURE_REASONS[job.reason] ?? FAILURE_REASONS.error;
   const err = job.error?.message || job.stderr || reasonConfig.defaultMessage;
-  return `${prefix}${reasonConfig.heading}\n\n${err}${sessionFooter}\n`;
+  return `${prefix}${heading}\n\n${err}${sessionFooter}\n`;
 }
 
 export function formatAge(dateStr, now = Date.now()) {

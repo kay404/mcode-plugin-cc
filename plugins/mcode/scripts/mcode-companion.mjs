@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
 import {
@@ -11,7 +11,8 @@ import {
   RESUME_CANDIDATE_OPTION_CONFIG,
   STATUS_OPTION_CONFIG,
   RESULT_OPTION_CONFIG,
-  CANCEL_OPTION_CONFIG
+  CANCEL_OPTION_CONFIG,
+  REVIEW_OPTION_CONFIG
 } from "./lib/args.mjs";
 import {
   generateJobId,
@@ -40,7 +41,7 @@ import {
   formatAge
 } from "./lib/render.mjs";
 import { runSetupChecks, renderSetupResult } from "./lib/setup.mjs";
-import { captureWorkspaceSnapshot, evaluateWorkspaceGuard } from "./lib/workspace-guard.mjs";
+import { captureWorkspaceSnapshot, evaluateWorkspaceGuard, isGitWorkspace } from "./lib/workspace-guard.mjs";
 
 const SESSION_ID_ENV = "MCODE_CLAUDE_SESSION_ID";
 
@@ -49,6 +50,7 @@ function printUsage() {
     "Usage:",
     "  node scripts/mcode-companion.mjs delegate [--read-only] [--full] [--resume] [--fresh] [--model <model>] [--effort <effort>] [--json] <task>",
     "  node scripts/mcode-companion.mjs resume-candidate [--json]",
+    "  node scripts/mcode-companion.mjs review [--wait] [--background] [--json]",
     "  node scripts/mcode-companion.mjs setup [--json]",
     "  node scripts/mcode-companion.mjs status [job-id] [--all] [--json]",
     "  node scripts/mcode-companion.mjs result [job-id] [--all] [--json]",
@@ -63,15 +65,92 @@ function splitSubcommandArgs(rawArgs) {
   return rawArgs;
 }
 
-async function executeDelegation(job, workspaceRoot, invocationCwd, onProgress = () => {}) {
+function buildJobRecord({
+  id,
+  kind,
+  title,
+  prompt = null,
+  command,
+  cwd,
+  workspace,
+  sessionId = null,
+  isBackground = false,
+  readOnly = false,
+  permission = "smart",
+  model = null,
+  effort = null,
+  mcodeSessionId = null
+}) {
+  const now = new Date().toISOString();
+  return {
+    id,
+    kind,
+    title,
+    prompt,
+    command,
+    cwd,
+    workspace,
+    sessionId,
+    processId: isBackground ? null : process.pid,
+    readOnly,
+    permission,
+    model,
+    effort,
+    mcodeSessionId,
+    status: isBackground ? "queued" : "running",
+    reason: null,
+    output: null,
+    renderedOutput: null,
+    error: null,
+    usage: null,
+    readOnlyGuard: null,
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
+function launchBackgroundWorker(job, workspaceRoot, logMessage, isJson) {
+  appendJobLog(workspaceRoot, job.id, logMessage);
+
+  const companionScript = path.resolve(process.argv[1]);
+  const worker = spawn(process.execPath, [
+    companionScript,
+    "delegate-worker",
+    "--job-id",
+    job.id
+  ], {
+    cwd: job.cwd || job.workspace,
+    detached: true,
+    stdio: "ignore",
+    env: process.env
+  });
+  worker.unref();
+
+  if (isJson) {
+    console.log(JSON.stringify(buildJobJsonPayload(job), null, 2));
+  } else {
+    process.stdout.write([
+      `Job ${job.id} started in the background.`,
+      "",
+      `To check progress:  /mcode:status ${job.id}`,
+      `To read results:    /mcode:result ${job.id}`,
+      `To cancel:          /mcode:cancel ${job.id}`,
+      ""
+    ].join("\n"));
+  }
+}
+
+async function executeJob(job, workspaceRoot, onProgress = () => {}) {
   const readOnly = job.readOnly;
   const snapshotBefore = readOnly ? captureWorkspaceSnapshot(workspaceRoot) : null;
-  const mcodePrompt = readOnly ? wrapReadOnlyPrompt(job.prompt) : job.prompt;
+  const mcodePrompt = job.prompt && readOnly ? wrapReadOnlyPrompt(job.prompt) : job.prompt;
+  const execCwd = job.cwd || workspaceRoot;
 
   let outcome;
   try {
     outcome = await runMcode({
-      cwd: invocationCwd,
+      command: job.command,
+      cwd: execCwd,
       permission: job.permission,
       model: job.model,
       effort: job.effort,
@@ -171,11 +250,9 @@ async function handleDelegate(rawTokens) {
   }
 
   const jobId = generateJobId("delegate");
-  const createdAt = new Date().toISOString();
-
   const isBackground = Boolean(options.background);
 
-  const job = {
+  const job = buildJobRecord({
     id: jobId,
     kind: "delegate",
     title: prompt,
@@ -183,60 +260,24 @@ async function handleDelegate(rawTokens) {
     cwd: invocationCwd,
     workspace: workspaceRoot,
     sessionId: currentSessionId,
-    processId: isBackground ? null : process.pid,
+    isBackground,
     readOnly,
     permission,
     model: options.model || null,
     effort: options.effort || null,
-    mcodeSessionId: targetMcodeSessionId || null,
-    status: isBackground ? "queued" : "running",
-    reason: null,
-    output: null,
-    renderedOutput: null,
-    error: null,
-    usage: null,
-    readOnlyGuard: null,
-    createdAt,
-    updatedAt: createdAt
-  };
+    mcodeSessionId: targetMcodeSessionId || null
+  });
 
   saveJob(workspaceRoot, job);
 
   if (isBackground) {
-    appendJobLog(workspaceRoot, jobId, `Queued delegation: "${prompt.slice(0, 80)}"`);
-
-    const companionScript = path.resolve(process.argv[1]);
-    const worker = spawn(process.execPath, [
-      companionScript,
-      "delegate-worker",
-      "--job-id",
-      jobId
-    ], {
-      cwd: invocationCwd,
-      detached: true,
-      stdio: "ignore",
-      env: process.env
-    });
-    worker.unref();
-
-    if (options.json) {
-      console.log(JSON.stringify(buildJobJsonPayload(job), null, 2));
-    } else {
-      process.stdout.write([
-        `Job ${jobId} started in the background.`,
-        "",
-        `To check progress:  /mcode:status ${jobId}`,
-        `To read results:    /mcode:result ${jobId}`,
-        `To cancel:          /mcode:cancel ${jobId}`,
-        ""
-      ].join("\n"));
-    }
+    launchBackgroundWorker(job, workspaceRoot, `Queued delegation: "${prompt.slice(0, 80)}"`, options.json);
     return;
   }
 
   appendJobLog(workspaceRoot, jobId, `Starting delegation: "${prompt.slice(0, 80)}"`);
 
-  const outcome = await executeDelegation(job, workspaceRoot, invocationCwd, (line) => {
+  const outcome = await executeJob(job, workspaceRoot, (line) => {
     appendJobLog(workspaceRoot, jobId, line);
     if (!options.json) {
       process.stderr.write(`[mcode] ${line}\n`);
@@ -281,8 +322,7 @@ async function handleDelegateWorker(rawTokens) {
   saveJob(workspaceRoot, job);
   appendJobLog(workspaceRoot, jobId, `Worker started with PID ${process.pid}`);
 
-  const invocationCwd = job.cwd || job.workspace;
-  await executeDelegation(job, workspaceRoot, invocationCwd, (line) => {
+  await executeJob(job, workspaceRoot, (line) => {
     appendJobLog(workspaceRoot, jobId, line);
   });
 }
@@ -565,6 +605,102 @@ async function handleCancel(rawTokens) {
   }
 }
 
+async function handleReview(rawTokens) {
+  let parsed;
+  try {
+    const tokens = splitSubcommandArgs(rawTokens);
+    parsed = parseArgs(tokens, REVIEW_OPTION_CONFIG);
+  } catch (err) {
+    console.error(`Error: ${err.message}`);
+    process.exit(1);
+  }
+
+  const nonWhitespacePositionals = parsed.positionals.filter((p) => p.trim());
+  if (nonWhitespacePositionals.length > 0) {
+    console.error(`Unexpected argument: "${nonWhitespacePositionals[0]}". review takes no positional arguments.`);
+    process.exit(1);
+  }
+
+  if (parsed.options.wait && parsed.options.background) {
+    console.error("Error: Cannot combine --wait and --background (they are mutually exclusive).");
+    process.exit(1);
+  }
+
+  const invocationCwd = process.cwd();
+  if (!isGitWorkspace(invocationCwd)) {
+    console.error("Error: Not a git repository.");
+    process.exit(1);
+  }
+
+  const workspaceRoot = resolveWorkspaceRoot(invocationCwd);
+
+  let statusOutput;
+  try {
+    statusOutput = execFileSync("git", ["-C", workspaceRoot, "status", "--porcelain"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"]
+    });
+  } catch {
+    console.error("Error: git status failed.");
+    process.exit(1);
+  }
+
+  if (!statusOutput.trim()) {
+    if (parsed.options.json) {
+      console.log(JSON.stringify({
+        hasChanges: false,
+        message: "No uncommitted changes to review."
+      }, null, 2));
+    } else {
+      console.log("No uncommitted changes to review.");
+    }
+    return;
+  }
+
+  const isBackground = Boolean(parsed.options.background);
+  const jobId = generateJobId("review");
+  const currentSessionId = process.env[SESSION_ID_ENV] || null;
+
+  const job = buildJobRecord({
+    id: jobId,
+    kind: "review",
+    title: "Review uncommitted changes",
+    command: "review",
+    cwd: workspaceRoot,
+    workspace: workspaceRoot,
+    sessionId: currentSessionId,
+    isBackground,
+    readOnly: true,
+    permission: "smart"
+  });
+
+  saveJob(workspaceRoot, job);
+
+  if (isBackground) {
+    launchBackgroundWorker(job, workspaceRoot, "Queued review of uncommitted changes", parsed.options.json);
+    return;
+  }
+
+  appendJobLog(workspaceRoot, jobId, "Starting review of uncommitted changes");
+
+  const outcome = await executeJob(job, workspaceRoot, (line) => {
+    appendJobLog(workspaceRoot, jobId, line);
+    if (!parsed.options.json) {
+      process.stderr.write(`[mcode] ${line}\n`);
+    }
+  });
+
+  if (parsed.options.json) {
+    console.log(JSON.stringify(buildJobJsonPayload(job), null, 2));
+  } else {
+    process.stdout.write(job.renderedOutput);
+  }
+
+  if (job.status !== "completed") {
+    process.exit(outcome.exitCode && outcome.exitCode !== 0 ? outcome.exitCode : 1);
+  }
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   const subcommand = argv[0];
@@ -586,6 +722,11 @@ async function main() {
 
   if (subcommand === "resume-candidate") {
     await handleResumeCandidate(argv.slice(1));
+    return;
+  }
+
+  if (subcommand === "review") {
+    await handleReview(argv.slice(1));
     return;
   }
 

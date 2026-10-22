@@ -107,4 +107,4 @@ if (process.env.MCODE_STDERR) {
 }
 
 const exitCode = process.env.MCODE_EXIT_CODE ? parseInt(process.env.MCODE_EXIT_CODE, 10) : 0;
-process.exit(exitCode);
+process.exitCode = exitCode;

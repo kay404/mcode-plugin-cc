@@ -16,11 +16,25 @@ export function buildMcodeArgv(options) {
     permission = "smart",
     model,
     effort,
-    session
+    session,
+    command
   } = options;
 
   if (permission === "off") {
     throw new Error("Permission level 'off' is disabled in the mcode plugin for safety.");
+  }
+
+  if (command === "review") {
+    return [
+      "exec",
+      "review",
+      "--cwd",
+      cwd,
+      "--permission",
+      permission,
+      "--output-format",
+      "stream-json"
+    ];
   }
 
   const argv = [
