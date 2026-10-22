@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import test, { afterEach } from "node:test";
+import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { makeTempDir, runCompanion } from "./helpers/run-companion.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, "..");
@@ -12,61 +12,6 @@ const COMPANION_SCRIPT = path.join(ROOT_DIR, "plugins/mcode/scripts/mcode-compan
 const HOOK_SCRIPT = path.join(ROOT_DIR, "plugins/mcode/scripts/session-start.mjs");
 const FAKE_MCODE = path.join(ROOT_DIR, "tests/helpers/fake-mcode.mjs");
 const FIXTURES_DIR = path.join(ROOT_DIR, "tests/fixtures");
-
-const tempDirsToClean = [];
-
-function makeTempDir(prefix) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  tempDirsToClean.push(dir);
-  return dir;
-}
-
-afterEach(() => {
-  while (tempDirsToClean.length > 0) {
-    const dir = tempDirsToClean.pop();
-    try {
-      fs.rmSync(dir, { recursive: true, force: true });
-    } catch {}
-  }
-});
-
-function runCompanion(args, options = {}) {
-  const pluginDataDir = options.pluginDataDir ?? makeTempDir("mcode-test-data-");
-  const binDir = makeTempDir("mcode-test-bin-");
-
-  if (!options.noMcodeOnPath) {
-    const symlinkPath = path.join(binDir, "mcode");
-    try {
-      fs.symlinkSync(FAKE_MCODE, symlinkPath);
-    } catch {
-      fs.copyFileSync(FAKE_MCODE, symlinkPath);
-      fs.chmodSync(symlinkPath, 0o755);
-    }
-  }
-
-  const nodeDir = path.dirname(process.execPath);
-  const combinedEnv = {
-    ...process.env,
-    PATH: options.noMcodeOnPath ? `${nodeDir}:/usr/bin:/bin` : `${binDir}:${process.env.PATH}`,
-    MCODE_PLUGIN_DATA: pluginDataDir,
-    MCODE_CLAUDE_SESSION_ID: options.sessionId ?? "test-session-001",
-    ...(options.env ?? {})
-  };
-
-  const cwd = options.cwd ?? ROOT_DIR;
-  const result = spawnSync(process.execPath, [COMPANION_SCRIPT, ...args], {
-    cwd,
-    env: combinedEnv,
-    encoding: "utf8"
-  });
-
-  const status = result.status ?? 1;
-  const stdout = result.stdout ?? "";
-  const stderr = result.stderr ?? "";
-  const error = result.error ?? null;
-
-  return { status, stdout, stderr, error, pluginDataDir };
-}
 
 function runSessionStartHook(stdinJson, env = {}) {
   const nodeDir = path.dirname(process.execPath);

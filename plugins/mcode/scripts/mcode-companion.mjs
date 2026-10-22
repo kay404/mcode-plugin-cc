@@ -26,6 +26,7 @@ import {
   renderJobDetail,
   buildJobJsonPayload
 } from "./lib/render.mjs";
+import { captureWorkspaceSnapshot, evaluateWorkspaceGuard } from "./lib/workspace-guard.mjs";
 
 const SESSION_ID_ENV = "MCODE_CLAUDE_SESSION_ID";
 
@@ -71,6 +72,8 @@ async function handleDelegate(rawTokens) {
   const jobId = generateJobId("delegate");
   const createdAt = new Date().toISOString();
 
+  const snapshotBefore = readOnly ? captureWorkspaceSnapshot(workspaceRoot) : null;
+
   const job = {
     id: jobId,
     kind: "delegate",
@@ -90,6 +93,7 @@ async function handleDelegate(rawTokens) {
     renderedOutput: null,
     error: null,
     usage: null,
+    readOnlyGuard: null,
     createdAt,
     updatedAt: createdAt
   };
@@ -122,6 +126,17 @@ async function handleDelegate(rawTokens) {
       exitCode: 1,
       stderr: err.message
     };
+  }
+
+  if (readOnly) {
+    job.readOnlyGuard = evaluateWorkspaceGuard(snapshotBefore, workspaceRoot);
+    if (job.readOnlyGuard.changedPaths.length > 0 || job.readOnlyGuard.headMoved || job.readOnlyGuard.stashChanged) {
+      appendJobLog(
+        workspaceRoot,
+        jobId,
+        `Read-only violation detected: ${job.readOnlyGuard.changedPaths.join(", ")}`
+      );
+    }
   }
 
   job.status = outcome.status;
