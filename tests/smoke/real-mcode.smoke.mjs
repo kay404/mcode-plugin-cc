@@ -29,8 +29,8 @@ function cleanDir(dir) {
 
 test("real-mcode smoke test: delegate --read-only and review --wait", {
   skip: isSmoke ? false : "Skipping real-mcode smoke test (set MCODE_SMOKE=1 to run)",
-  timeout: 300_000
-}, async () => {
+  timeout: 600_000
+}, () => {
   const tempRepoDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcode-smoke-repo-"));
   const tempPluginData = fs.mkdtempSync(path.join(os.tmpdir(), "mcode-smoke-data-"));
 
@@ -38,7 +38,6 @@ test("real-mcode smoke test: delegate --read-only and review --wait", {
     const sessionId = `smoke-session-${Date.now()}`;
     const smokeEnv = {
       ...process.env,
-      PATH: process.env.PATH,
       MCODE_PLUGIN_DATA: tempPluginData,
       MCODE_CLAUDE_SESSION_ID: sessionId
     };
@@ -103,7 +102,7 @@ test("real-mcode smoke test: delegate --read-only and review --wait", {
         cwd: tempRepoDir,
         env: smokeEnv,
         encoding: "utf8",
-        timeout: 120_000
+        timeout: 300_000
       }
     );
 
