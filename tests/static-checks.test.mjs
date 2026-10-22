@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { checkVersions } from "../scripts/version-check.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, "..");
@@ -61,19 +64,104 @@ function parseFrontmatter(content) {
 }
 
 test("manifests have matching versions and correct metadata", () => {
-  const pkg = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, "package.json"), "utf8"));
+  const version = checkVersions(ROOT_DIR);
+  assert.equal(version, "0.1.0");
+
   const marketplace = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, ".claude-plugin/marketplace.json"), "utf8"));
   const plugin = JSON.parse(fs.readFileSync(path.join(PLUGIN_DIR, ".claude-plugin/plugin.json"), "utf8"));
 
-  assert.equal(pkg.version, "0.1.0");
-  assert.equal(marketplace.metadata.version, pkg.version);
-  assert.equal(plugin.version, pkg.version);
   assert.equal(marketplace.name, "mcode-plugin-cc");
   assert.equal(marketplace.plugins[0].name, "mcode");
   assert.equal(marketplace.plugins[0].source, "./plugins/mcode");
   assert.equal(plugin.name, "mcode");
   assert.equal(plugin.license, "MIT");
   assert.equal(plugin.author.name, "kay404");
+});
+
+test("version-sync check fails when manifests have mismatched versions", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcode-version-check-test-"));
+  try {
+    const createFixtures = (overrides = {}) => {
+      fs.mkdirSync(path.join(tempDir, ".claude-plugin"), { recursive: true });
+      fs.mkdirSync(path.join(tempDir, "plugins/mcode/.claude-plugin"), { recursive: true });
+
+      const pkg = { name: "test-pkg", version: overrides.pkgVersion ?? "1.0.0" };
+      const marketplace = {
+        name: "test-marketplace",
+        plugins: [{ name: "mcode", version: overrides.marketplacePluginVersion ?? "1.0.0" }]
+      };
+      if (overrides.marketplaceMetaVersion !== undefined) {
+        marketplace.metadata = { version: overrides.marketplaceMetaVersion };
+      }
+      const plugin = { name: "mcode", version: overrides.pluginVersion ?? "1.0.0" };
+
+      fs.writeFileSync(path.join(tempDir, "package.json"), JSON.stringify(pkg));
+      fs.writeFileSync(path.join(tempDir, ".claude-plugin/marketplace.json"), JSON.stringify(marketplace));
+      fs.writeFileSync(path.join(tempDir, "plugins/mcode/.claude-plugin/plugin.json"), JSON.stringify(plugin));
+    };
+
+    createFixtures({ pluginVersion: "1.0.1" });
+    assert.throws(
+      () => checkVersions(tempDir),
+      /plugins\/mcode\/\.claude-plugin\/plugin\.json version \(1\.0\.1\) does not match package\.json \(1\.0\.0\)/
+    );
+
+    createFixtures({ marketplacePluginVersion: "1.0.2" });
+    assert.throws(
+      () => checkVersions(tempDir),
+      /\.claude-plugin\/marketplace\.json plugin entry version \(1\.0\.2\) does not match package\.json \(1\.0\.0\)/
+    );
+
+    createFixtures({ marketplaceMetaVersion: "1.0.3" });
+    assert.throws(
+      () => checkVersions(tempDir),
+      /\.claude-plugin\/marketplace\.json metadata version \(1\.0\.3\) does not match package\.json \(1\.0\.0\)/
+    );
+
+    createFixtures({ marketplaceMetaVersion: "1.0.0" });
+    assert.equal(checkVersions(tempDir), "1.0.0");
+
+    createFixtures();
+    assert.equal(checkVersions(tempDir), "1.0.0");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("version-check script CLI exits 0 on match and 1 on mismatch", () => {
+  const versionCheckScript = path.join(ROOT_DIR, "scripts/version-check.mjs");
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcode-version-cli-test-"));
+  try {
+    fs.mkdirSync(path.join(tempDir, ".claude-plugin"), { recursive: true });
+    fs.mkdirSync(path.join(tempDir, "plugins/mcode/.claude-plugin"), { recursive: true });
+
+    fs.writeFileSync(path.join(tempDir, "package.json"), JSON.stringify({ version: "1.0.0" }));
+    fs.writeFileSync(
+      path.join(tempDir, ".claude-plugin/marketplace.json"),
+      JSON.stringify({ plugins: [{ name: "mcode", version: "1.0.0" }] })
+    );
+    fs.writeFileSync(
+      path.join(tempDir, "plugins/mcode/.claude-plugin/plugin.json"),
+      JSON.stringify({ version: "2.0.0" })
+    );
+
+    const failRun = spawnSync(process.execPath, [versionCheckScript, tempDir], { encoding: "utf8" });
+    assert.equal(failRun.status, 1);
+    assert.match(failRun.stderr, /Version mismatch:/);
+
+    const passRun = spawnSync(process.execPath, [versionCheckScript, ROOT_DIR], { encoding: "utf8" });
+    assert.equal(passRun.status, 0);
+    assert.match(passRun.stdout, /Version check passed: 0\.1\.0/);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("version-check script rejects unknown flags", () => {
+  const versionCheckScript = path.join(ROOT_DIR, "scripts/version-check.mjs");
+  const run = spawnSync(process.execPath, [versionCheckScript, "--unknown"], { encoding: "utf8" });
+  assert.equal(run.status, 1);
+  assert.match(run.stderr, /Unknown option: --unknown/);
 });
 
 test("all plugin command, agent, and skill markdown files have valid frontmatter", () => {
