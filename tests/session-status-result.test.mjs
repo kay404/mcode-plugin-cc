@@ -3,7 +3,7 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import test, { afterEach } from "node:test";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -13,9 +13,26 @@ const HOOK_SCRIPT = path.join(ROOT_DIR, "plugins/mcode/scripts/session-start.mjs
 const FAKE_MCODE = path.join(ROOT_DIR, "tests/helpers/fake-mcode.mjs");
 const FIXTURES_DIR = path.join(ROOT_DIR, "tests/fixtures");
 
+const tempDirsToClean = [];
+
+function makeTempDir(prefix) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  tempDirsToClean.push(dir);
+  return dir;
+}
+
+afterEach(() => {
+  while (tempDirsToClean.length > 0) {
+    const dir = tempDirsToClean.pop();
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch {}
+  }
+});
+
 function runCompanion(args, options = {}) {
-  const pluginDataDir = options.pluginDataDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "mcode-test-data-"));
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcode-test-bin-"));
+  const pluginDataDir = options.pluginDataDir ?? makeTempDir("mcode-test-data-");
+  const binDir = makeTempDir("mcode-test-bin-");
 
   if (!options.noMcodeOnPath) {
     const symlinkPath = path.join(binDir, "mcode");
@@ -31,7 +48,7 @@ function runCompanion(args, options = {}) {
   const combinedEnv = {
     ...process.env,
     PATH: options.noMcodeOnPath ? `${nodeDir}:/usr/bin:/bin` : `${binDir}:${process.env.PATH}`,
-    CLAUDE_PLUGIN_DATA: pluginDataDir,
+    MCODE_PLUGIN_DATA: pluginDataDir,
     MCODE_CLAUDE_SESSION_ID: options.sessionId ?? "test-session-001",
     ...(options.env ?? {})
   };
@@ -73,7 +90,7 @@ function runSessionStartHook(stdinJson, env = {}) {
 }
 
 test("SessionStart hook appends single-quoted exports safe from subshell expansion", () => {
-  const pluginDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcode-test-hook-data-"));
+  const pluginDataDir = makeTempDir("mcode-test-hook-data-");
   const envFile = path.join(pluginDataDir, "claude-env.sh");
   fs.writeFileSync(envFile, "# Session env file\n");
 
@@ -88,10 +105,11 @@ test("SessionStart hook appends single-quoted exports safe from subshell expansi
   assert.equal(hookRes.status, 0);
   const envContent = fs.readFileSync(envFile, "utf8");
   assert.ok(envContent.includes("export MCODE_CLAUDE_SESSION_ID='session-id'\\''with$(evil)'"));
-  assert.ok(envContent.includes(`export CLAUDE_PLUGIN_DATA='/path/with spaces/$(whoami)/\`date\`/"double'\\''quotes"'`));
+  assert.ok(envContent.includes(`export MCODE_PLUGIN_DATA='/path/with spaces/$(whoami)/\`date\`/"double'\\''quotes"'`));
+  assert.ok(!envContent.includes("export CLAUDE_PLUGIN_DATA="));
 
   // Sourcing the env file in a subshell recovers byte-identical values without executing $(whoami) or `date`
-  const subshell = spawnSync("sh", ["-c", `. "${envFile}" && printf "%s\n%s" "$MCODE_CLAUDE_SESSION_ID" "$CLAUDE_PLUGIN_DATA"`], {
+  const subshell = spawnSync("sh", ["-c", `. "${envFile}" && printf "%s\n%s" "$MCODE_CLAUDE_SESSION_ID" "$MCODE_PLUGIN_DATA"`], {
     encoding: "utf8"
   });
   assert.equal(subshell.status, 0);
@@ -99,7 +117,7 @@ test("SessionStart hook appends single-quoted exports safe from subshell expansi
   assert.equal(recoveredSessionId, trickySessionId);
   assert.equal(recoveredPluginData, trickyValue);
 
-  // Companion reading MCODE_CLAUDE_SESSION_ID records Job under that session
+  // Companion reading MCODE_CLAUDE_SESSION_ID and MCODE_PLUGIN_DATA records Job under that session
   const compRes = runCompanion(["delegate", "--json", "task from hooked session"], {
     pluginDataDir,
     sessionId: trickySessionId,
@@ -111,8 +129,39 @@ test("SessionStart hook appends single-quoted exports safe from subshell expansi
   assert.equal(parsed.sessionId, trickySessionId);
 });
 
+test("companion uses MCODE_PLUGIN_DATA and ignores foreign CLAUDE_PLUGIN_DATA", () => {
+  const ourPluginDataDir = makeTempDir("mcode-test-ours-");
+  const foreignPluginDataDir = makeTempDir("mcode-test-foreign-");
+
+  const delRes = runCompanion(["delegate", "--json", "task with foreign env present"], {
+    pluginDataDir: ourPluginDataDir,
+    env: {
+      CLAUDE_PLUGIN_DATA: foreignPluginDataDir,
+      MCODE_FIXTURE: path.join(FIXTURES_DIR, "success.stream.jsonl")
+    }
+  });
+  assert.equal(delRes.status, 0);
+  const parsed = JSON.parse(delRes.stdout);
+
+  // Status must find the Job in our directory
+  const statusRes = runCompanion(["status", "--json"], {
+    pluginDataDir: ourPluginDataDir,
+    env: {
+      CLAUDE_PLUGIN_DATA: foreignPluginDataDir
+    }
+  });
+  assert.equal(statusRes.status, 0);
+  const jobs = JSON.parse(statusRes.stdout);
+  assert.equal(jobs.length, 1);
+  assert.equal(jobs[0].id, parsed.id);
+
+  // The foreign directory must stay completely empty
+  const foreignContents = fs.readdirSync(foreignPluginDataDir);
+  assert.equal(foreignContents.length, 0, "foreign CLAUDE_PLUGIN_DATA directory must remain empty");
+});
+
 test("status splits raw argument string on whitespace", () => {
-  const pluginDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcode-test-rawargs-"));
+  const pluginDataDir = makeTempDir("mcode-test-rawargs-");
 
   const res = runCompanion(["delegate", "--json", "task for raw status args"], {
     pluginDataDir,
@@ -130,7 +179,7 @@ test("status splits raw argument string on whitespace", () => {
 });
 
 test("Job record includes title, process id, and rendered output", () => {
-  const pluginDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcode-test-job-fields-"));
+  const pluginDataDir = makeTempDir("mcode-test-job-fields-");
 
   const res = runCompanion(["delegate", "--json", "investigate latency regression"], {
     pluginDataDir,
@@ -147,7 +196,7 @@ test("Job record includes title, process id, and rendered output", () => {
 });
 
 test("status table outputs id, kind, state, age, and progress preview without final completion marker", () => {
-  const pluginDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcode-test-status-table-"));
+  const pluginDataDir = makeTempDir("mcode-test-status-table-");
 
   const res = runCompanion(["delegate", "first task"], {
     pluginDataDir,
@@ -170,7 +219,7 @@ test("status table outputs id, kind, state, age, and progress preview without fi
 });
 
 test("status for a single Job displays details and recent progress lines", () => {
-  const pluginDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcode-test-single-job-"));
+  const pluginDataDir = makeTempDir("mcode-test-single-job-");
 
   const delRes = runCompanion(["delegate", "--json", "single job status test"], {
     pluginDataDir,
@@ -204,7 +253,7 @@ test("status rejects unsupported options with clear message", () => {
 });
 
 test("result defaults to the most recent finished Job of the session", () => {
-  const pluginDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcode-test-result-default-"));
+  const pluginDataDir = makeTempDir("mcode-test-result-default-");
 
   runCompanion(["delegate", "older job"], {
     pluginDataDir,
@@ -229,7 +278,7 @@ test("result defaults to the most recent finished Job of the session", () => {
 });
 
 test("result with Job id prints that specific Job output", () => {
-  const pluginDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcode-test-result-id-"));
+  const pluginDataDir = makeTempDir("mcode-test-result-id-");
 
   const delRes = runCompanion(["delegate", "--json", "specific job target"], {
     pluginDataDir,
@@ -248,9 +297,9 @@ test("result with Job id prints that specific Job output", () => {
   assert.equal(parsed.title, "specific job target");
 });
 
-test("result reports error when target Job is still running", () => {
-  const pluginDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcode-test-running-"));
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcode-test-bin-"));
+test("result reports error when target Job is still running", (t) => {
+  const pluginDataDir = makeTempDir("mcode-test-running-");
+  const binDir = makeTempDir("mcode-test-bin-");
 
   const symlinkPath = path.join(binDir, "mcode");
   try {
@@ -260,17 +309,22 @@ test("result reports error when target Job is still running", () => {
     fs.chmodSync(symlinkPath, 0o755);
   }
 
-  const nodeDir = path.dirname(process.execPath);
   const child = spawn(process.execPath, [COMPANION_SCRIPT, "delegate", "long running task"], {
     cwd: ROOT_DIR,
     env: {
       ...process.env,
       PATH: `${binDir}:${process.env.PATH}`,
-      CLAUDE_PLUGIN_DATA: pluginDataDir,
+      MCODE_PLUGIN_DATA: pluginDataDir,
       MCODE_CLAUDE_SESSION_ID: "test-running-session",
       MCODE_SLEEP_MS: "5000",
       MCODE_FIXTURE: path.join(FIXTURES_DIR, "success.stream.jsonl")
     }
+  });
+
+  t.after(() => {
+    try {
+      child.kill("SIGKILL");
+    } catch {}
   });
 
   let runningJobId = null;
@@ -305,7 +359,7 @@ test("result reports error when target Job is still running", () => {
 });
 
 test("result accepts --all to read finished Job from another session by id", () => {
-  const pluginDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcode-test-result-all-"));
+  const pluginDataDir = makeTempDir("mcode-test-result-all-");
 
   // Session A creates Job A
   const jobARes = runCompanion(["delegate", "--json", "task from session A"], {
@@ -341,14 +395,14 @@ test("result rejects unsupported options with clear message", () => {
 });
 
 test("result with no finished jobs exits with clear error", () => {
-  const pluginDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcode-test-result-empty-"));
+  const pluginDataDir = makeTempDir("mcode-test-result-empty-");
   const res = runCompanion(["result"], { pluginDataDir });
   assert.notEqual(res.status, 0);
   assert.ok(res.stderr.includes("No finished Jobs found for this session"));
 });
 
 test("Job ids resolve by unique prefix, ambiguous prefix lists candidates, unknown id gives clear error", () => {
-  const pluginDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcode-test-prefix-"));
+  const pluginDataDir = makeTempDir("mcode-test-prefix-");
 
   const job1Res = runCompanion(["delegate", "--json", "prefix job 1"], {
     pluginDataDir,
@@ -383,7 +437,7 @@ test("Job ids resolve by unique prefix, ambiguous prefix lists candidates, unkno
 });
 
 test("two Claude session ids in the same workspace do not see each other's Jobs unless --all", () => {
-  const pluginDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcode-test-sessions-"));
+  const pluginDataDir = makeTempDir("mcode-test-sessions-");
 
   // Session A creates Job A
   const jobARes = runCompanion(["delegate", "--json", "task in session A"], {
@@ -443,7 +497,7 @@ test("two Claude session ids in the same workspace do not see each other's Jobs 
 });
 
 test("index bounded at 50 (newest first), pruned records' files removed", () => {
-  const pluginDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcode-test-bounded-"));
+  const pluginDataDir = makeTempDir("mcode-test-bounded-");
   const jobIds = [];
 
   // Create 52 jobs sequentially through companion

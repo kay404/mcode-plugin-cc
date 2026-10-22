@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import test, { afterEach } from "node:test";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -12,9 +12,26 @@ const COMPANION_SCRIPT = path.join(ROOT_DIR, "plugins/mcode/scripts/mcode-compan
 const FAKE_MCODE = path.join(ROOT_DIR, "tests/helpers/fake-mcode.mjs");
 const FIXTURES_DIR = path.join(ROOT_DIR, "tests/fixtures");
 
+const tempDirsToClean = [];
+
+function makeTempDir(prefix) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  tempDirsToClean.push(dir);
+  return dir;
+}
+
+afterEach(() => {
+  while (tempDirsToClean.length > 0) {
+    const dir = tempDirsToClean.pop();
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch {}
+  }
+});
+
 function runCompanion(args, options = {}) {
-  const pluginDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcode-test-data-"));
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcode-test-bin-"));
+  const pluginDataDir = options.pluginDataDir ?? makeTempDir("mcode-test-data-");
+  const binDir = makeTempDir("mcode-test-bin-");
 
   if (!options.noMcodeOnPath) {
     const symlinkPath = path.join(binDir, "mcode");
@@ -34,7 +51,7 @@ function runCompanion(args, options = {}) {
   const combinedEnv = {
     ...process.env,
     PATH: options.noMcodeOnPath ? `${nodeDir}:/usr/bin:/bin` : `${binDir}:${process.env.PATH}`,
-    CLAUDE_PLUGIN_DATA: pluginDataDir,
+    MCODE_PLUGIN_DATA: pluginDataDir,
     MCODE_CLAUDE_SESSION_ID: "test-claude-session-001",
     MCODE_RECORD_ARGV: recordArgvFile,
     MCODE_RECORD_CWD: recordCwdFile,
@@ -184,7 +201,8 @@ test("persists Job as failed with reason mcode-not-found when mcode is missing f
 });
 
 test("persists Job as failed with reason unsupported-output-version and preserves session footer", () => {
-  const tempFixture = path.join(os.tmpdir(), "unknown-schema-test.jsonl");
+  const fixtureDir = makeTempDir("mcode-test-fixture-");
+  const tempFixture = path.join(fixtureDir, "unknown-schema-test.jsonl");
   const lines = [
     JSON.stringify({ schemaVersion: 1, type: "exec.started", sessionId: "mvs_unsupported_ver_01" }),
     JSON.stringify({ schemaVersion: 99, type: "exec.started", sessionId: "mvs_unsupported_ver_01" })
@@ -207,8 +225,6 @@ test("persists Job as failed with reason unsupported-output-version and preserve
   assert.ok(resText.stdout.includes("Unsupported mcode output version."));
   assert.ok(resText.stdout.includes("mcode session: mvs_unsupported_ver_01"));
   assert.ok(resText.stdout.includes("mcode --session mvs_unsupported_ver_01"));
-
-  fs.unlinkSync(tempFixture);
 });
 
 test("delegate uses full permission only when --full is requested", () => {

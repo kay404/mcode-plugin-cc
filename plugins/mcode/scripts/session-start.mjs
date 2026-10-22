@@ -37,7 +37,7 @@ function main() {
     exportsToAppend.push(`export MCODE_CLAUDE_SESSION_ID=${escapeShellSingleQuote(sessionId)}`);
   }
   if (process.env.CLAUDE_PLUGIN_DATA) {
-    exportsToAppend.push(`export CLAUDE_PLUGIN_DATA=${escapeShellSingleQuote(process.env.CLAUDE_PLUGIN_DATA)}`);
+    exportsToAppend.push(`export MCODE_PLUGIN_DATA=${escapeShellSingleQuote(process.env.CLAUDE_PLUGIN_DATA)}`);
   }
 
   if (exportsToAppend.length > 0) {

@@ -9,7 +9,7 @@ export const FINISHED_STATUSES = new Set(["completed", "failed", "cancelled"]);
 
 const MAX_JOBS = 50;
 const STATE_VERSION = 1;
-const PLUGIN_DATA_ENV = "CLAUDE_PLUGIN_DATA";
+const PLUGIN_DATA_ENV = "MCODE_PLUGIN_DATA";
 const FALLBACK_STATE_ROOT_DIR = path.join(os.tmpdir(), "mcode-companion");
 
 export function resolveWorkspaceRoot(cwd = process.cwd()) {
