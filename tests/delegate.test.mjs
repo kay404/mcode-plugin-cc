@@ -1,15 +1,13 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { runCompanion } from "./helpers/run-companion.mjs";
+import { makeTempDir, runCompanion } from "./helpers/run-companion.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, "..");
 const FIXTURES_DIR = path.join(ROOT_DIR, "tests/fixtures");
-
 test("delegate uses smart permission by default, --input - and pipes prompt via stdin", () => {
   const res = runCompanion(["delegate", "inspect", "the", "system"], {
     env: { MCODE_FIXTURE: path.join(FIXTURES_DIR, "success.stream.jsonl") }
@@ -127,7 +125,8 @@ test("persists Job as failed with reason mcode-not-found when mcode is missing f
 });
 
 test("persists Job as failed with reason unsupported-output-version and preserves session footer", () => {
-  const tempFixture = path.join(os.tmpdir(), "unknown-schema-test.jsonl");
+  const fixtureDir = makeTempDir("mcode-test-fixture-");
+  const tempFixture = path.join(fixtureDir, "unknown-schema-test.jsonl");
   const lines = [
     JSON.stringify({ schemaVersion: 1, type: "exec.started", sessionId: "mvs_unsupported_ver_01" }),
     JSON.stringify({ schemaVersion: 99, type: "exec.started", sessionId: "mvs_unsupported_ver_01" })
@@ -150,8 +149,6 @@ test("persists Job as failed with reason unsupported-output-version and preserve
   assert.ok(resText.stdout.includes("Unsupported mcode output version."));
   assert.ok(resText.stdout.includes("mcode session: mvs_unsupported_ver_01"));
   assert.ok(resText.stdout.includes("mcode --session mvs_unsupported_ver_01"));
-
-  fs.unlinkSync(tempFixture);
 });
 
 test("delegate uses full permission only when --full is requested", () => {
@@ -161,6 +158,17 @@ test("delegate uses full permission only when --full is requested", () => {
 
   assert.equal(res.status, 0);
   assert.equal(res.recordedArgv[res.recordedArgv.indexOf("--permission") + 1], "full");
+});
+
+test("delegate never re-splits arguments: task containing --full, quotes, apostrophes and newlines preserved byte-identical with smart permission", () => {
+  const prompt = "Explain what the --full flag does\nand why it's used with \"double quotes\".";
+  const res = runCompanion(["delegate", prompt], {
+    env: { MCODE_FIXTURE: path.join(FIXTURES_DIR, "success.stream.jsonl") }
+  });
+
+  assert.equal(res.status, 0);
+  assert.equal(res.recordedArgv[res.recordedArgv.indexOf("--permission") + 1], "smart");
+  assert.equal(res.recordedStdin, prompt);
 });
 
 test("delegate outputs structured JSON when --json is provided", () => {

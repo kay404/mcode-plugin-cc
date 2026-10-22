@@ -1,13 +1,12 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { runCompanion } from "./helpers/run-companion.mjs";
+import { makeTempDir, runCompanion } from "./helpers/run-companion.mjs";
 
 function initTestRepo() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mcode-guard-test-"));
+  const dir = makeTempDir("mcode-guard-test-");
   execFileSync("git", ["init"], { cwd: dir });
   execFileSync("git", ["config", "user.name", "Test User"], { cwd: dir });
   execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: dir });
@@ -179,7 +178,7 @@ test("read-only delegation reports git status failed when git status fails insid
 });
 
 test("read-only delegation outside a git repo completes and reports check could not run", () => {
-  const nonGitDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcode-guard-nongit-"));
+  const nonGitDir = makeTempDir("mcode-guard-nongit-");
   const res = runCompanion(["delegate", "--read-only", "inspect non-git dir"], { cwd: nonGitDir });
 
   assert.equal(res.status, 0);

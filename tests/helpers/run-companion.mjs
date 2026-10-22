@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { afterEach } from "node:test";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -11,9 +12,34 @@ const COMPANION_SCRIPT = path.join(ROOT_DIR, "plugins/mcode/scripts/mcode-compan
 const FAKE_MCODE = path.join(ROOT_DIR, "tests/helpers/fake-mcode.mjs");
 const FIXTURES_DIR = path.join(ROOT_DIR, "tests/fixtures");
 
+const tempDirsToClean = [];
+
+export function makeTempDir(prefix) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  tempDirsToClean.push(dir);
+  return dir;
+}
+
+export function cleanupTempDirs() {
+  while (tempDirsToClean.length > 0) {
+    const dir = tempDirsToClean.pop();
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch {}
+  }
+}
+
+try {
+  afterEach(() => {
+    cleanupTempDirs();
+  });
+} catch {
+  // Ignore if afterEach is called outside test context
+}
+
 export function runCompanion(args, options = {}) {
-  const pluginDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcode-test-data-"));
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcode-test-bin-"));
+  const pluginDataDir = options.pluginDataDir ?? makeTempDir("mcode-test-data-");
+  const binDir = makeTempDir("mcode-test-bin-");
 
   if (!options.noMcodeOnPath) {
     const symlinkPath = path.join(binDir, "mcode");
@@ -33,8 +59,8 @@ export function runCompanion(args, options = {}) {
   const combinedEnv = {
     ...process.env,
     PATH: options.noMcodeOnPath ? `${nodeDir}:/usr/bin:/bin` : `${binDir}:${process.env.PATH}`,
-    CLAUDE_PLUGIN_DATA: pluginDataDir,
-    CLAUDE_SESSION_ID: options.sessionId ?? "test-claude-session-001",
+    MCODE_PLUGIN_DATA: pluginDataDir,
+    MCODE_CLAUDE_SESSION_ID: options.sessionId ?? "test-claude-session-001",
     MCODE_RECORD_ARGV: recordArgvFile,
     MCODE_RECORD_CWD: recordCwdFile,
     MCODE_RECORD_STDIN: recordStdinFile,
