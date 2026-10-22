@@ -1,6 +1,6 @@
 ---
 description: Delegate investigation, diagnosis, or implementation to MiniMax's mcode coding agent
-argument-hint: "[--read-only] [--full] [--model <provider/model>] [--effort <low|medium|high|xhigh|max>] [task description]"
+argument-hint: "[--read-only] [--full] [--background] [--model <provider/model>] [--effort <low|medium|high|xhigh|max>] [task description]"
 allowed-tools: Bash(node:*), Agent
 ---
 

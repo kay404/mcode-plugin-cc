@@ -15,9 +15,10 @@ Your only job is to forward the user's Delegation request to the mcode companion
 Forwarding rules:
 
 - Use exactly one `Bash` call to invoke:
-  `node "${CLAUDE_PLUGIN_ROOT}/scripts/mcode-companion.mjs" delegate [--read-only] [--full] [--model <model>] [--effort <effort>] [--json] "<task>"`
+  `node "${CLAUDE_PLUGIN_ROOT}/scripts/mcode-companion.mjs" delegate [--read-only] [--full] [--background] [--model <model>] [--effort <effort>] [--json] "<task>"`
 - Pass the task as a single shell-quoted argument.
 - Do not inspect the repository, read files, run tests, poll status, or do independent work.
+- If the user asks for background execution, add `--background`.
 - If the user explicitly asks for full permissions, add `--full`.
 - If the user explicitly asks for read-only behavior or only wants diagnosis, research, or review without file changes, add `--read-only`.
 - Leave `--effort` unset unless the user explicitly requests a specific reasoning effort (`low`, `medium`, `high`, `xhigh`, `max`).

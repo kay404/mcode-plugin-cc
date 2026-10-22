@@ -28,6 +28,10 @@ if (process.env.MCODE_RECORD_STDIN) {
   fs.writeFileSync(process.env.MCODE_RECORD_STDIN, stdinData, "utf8");
 }
 
+if (process.env.MCODE_RECORD_PID) {
+  fs.writeFileSync(process.env.MCODE_RECORD_PID, String(process.pid), "utf8");
+}
+
 if (process.env.MCODE_SLEEP_MS) {
   const ms = parseInt(process.env.MCODE_SLEEP_MS, 10);
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);

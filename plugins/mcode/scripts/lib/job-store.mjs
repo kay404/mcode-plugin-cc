@@ -186,11 +186,119 @@ export function getJobProgressPreview(cwd, jobId) {
   return "-";
 }
 
+export function cleanupSessionJobs(cwd, sessionId) {
+  if (!sessionId) return;
+
+  const state = loadState(cwd);
+  const jobsToKeep = [];
+  const jobsToRemove = [];
+
+  for (const item of state.jobs) {
+    if (item.sessionId === sessionId) {
+      jobsToRemove.push(item);
+    } else {
+      jobsToKeep.push(item);
+    }
+  }
+
+  for (const item of jobsToRemove) {
+    const job = loadJob(cwd, item.id);
+    if (job && !FINISHED_STATUSES.has(job.status)) {
+      if (job.processId) {
+        terminateJobProcess(job.processId);
+      }
+    }
+    const jobFile = resolveJobFile(cwd, item.id);
+    const logFile = resolveJobLogFile(cwd, item.id);
+    if (fs.existsSync(jobFile)) {
+      try {
+        fs.unlinkSync(jobFile);
+      } catch {}
+    }
+    if (fs.existsSync(logFile)) {
+      try {
+        fs.unlinkSync(logFile);
+      } catch {}
+    }
+  }
+
+  state.jobs = jobsToKeep;
+  const stateDir = resolveStateDir(cwd);
+  const stateFile = path.join(stateDir, "state.json");
+  if (fs.existsSync(stateDir)) {
+    fs.writeFileSync(stateFile, JSON.stringify(state, null, 2), "utf8");
+  }
+}
+
 export function filterJobsBySession(jobs, options = {}) {
   if (options.all || options.sessionId === undefined) {
     return jobs;
   }
   return jobs.filter((j) => j.sessionId === options.sessionId);
+}
+
+export function findLatestJob(cwd, options = {}) {
+  const candidates = filterJobsBySession(loadState(cwd).jobs, options);
+  if (candidates.length === 0) {
+    throw new Error("No Jobs found for this session.");
+  }
+  return loadJobOrThrow(cwd, candidates[0].id);
+}
+
+export function findLatestActiveJob(cwd, options = {}) {
+  const candidates = filterJobsBySession(loadState(cwd).jobs, options);
+  const active = candidates.find((j) => !FINISHED_STATUSES.has(j.status));
+  if (!active) {
+    throw new Error("No running or queued Jobs found for this session.");
+  }
+  return loadJobOrThrow(cwd, active.id);
+}
+
+export function terminateJobProcess(pid, { graceMs = 200 } = {}) {
+  if (!pid || typeof pid !== "number") return;
+
+  function sendSignal(signal) {
+    try {
+      process.kill(-pid, signal);
+      return true;
+    } catch (err) {
+      if (err.code === "ESRCH") return false;
+      try {
+        process.kill(pid, signal);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+  }
+
+  function isAlive() {
+    try {
+      process.kill(-pid, 0);
+      return true;
+    } catch {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+  }
+
+  if (!sendSignal("SIGTERM")) {
+    return;
+  }
+
+  const start = Date.now();
+  while (Date.now() - start < graceMs) {
+    if (!isAlive()) return;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+  }
+
+  if (isAlive()) {
+    sendSignal("SIGKILL");
+  }
 }
 
 export function findLatestFinishedJob(cwd, options = {}) {
