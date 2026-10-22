@@ -88,6 +88,64 @@ function renderOutput(output) {
   return lines.join("\n").trim();
 }
 
+const SEVERITY_RANKS = {
+  critical: 0,
+  high: 1,
+  medium: 2,
+  low: 3
+};
+
+function renderAdversarialReviewOutput(output) {
+  if (typeof output === "string") {
+    return output.trim();
+  }
+  if (!output || typeof output !== "object") {
+    return "";
+  }
+
+  const lines = [];
+
+  if (output.verdict) {
+    lines.push(`Verdict: ${output.verdict}`);
+  }
+
+  if (output.summary) {
+    if (lines.length > 0) lines.push("");
+    lines.push(output.summary.trim());
+  }
+
+  if (Array.isArray(output.findings) && output.findings.length > 0) {
+    const sorted = [...output.findings].sort(
+      (a, b) => (SEVERITY_RANKS[a.severity] ?? 99) - (SEVERITY_RANKS[b.severity] ?? 99)
+    );
+
+    for (const f of sorted) {
+      lines.push("");
+      lines.push(`[${f.severity}] ${f.title}`);
+      lines.push(`${f.file}:${f.line_start}-${f.line_end}`);
+      lines.push(`Confidence: ${f.confidence}`);
+      lines.push(f.body.trim());
+      lines.push(`Recommendation: ${f.recommendation.trim()}`);
+    }
+  }
+
+  if (Array.isArray(output.next_steps) && output.next_steps.length > 0) {
+    lines.push("");
+    lines.push("Next steps:");
+    for (const step of output.next_steps) {
+      lines.push(`- ${step}`);
+    }
+  }
+
+  return lines.join("\n").trim();
+}
+
+const KIND_OUTPUT_RENDERERS = {
+  "adversarial-review": renderAdversarialReviewOutput,
+  "review": renderOutput,
+  "delegate": renderOutput
+};
+
 export function renderDelegationResult(job) {
   const noun = JOB_KIND_NOUNS[job.kind] ?? "delegation";
   const prefix = renderReadOnlyPrefix(job.readOnlyGuard, noun);
@@ -97,7 +155,8 @@ export function renderDelegationResult(job) {
     : "";
 
   if (job.status === "completed") {
-    const rawOutput = renderOutput(job.output);
+    const render = KIND_OUTPUT_RENDERERS[job.kind] ?? renderOutput;
+    const rawOutput = render(job.output);
     return `${prefix}${rawOutput}${sessionFooter}\n`;
   }
 

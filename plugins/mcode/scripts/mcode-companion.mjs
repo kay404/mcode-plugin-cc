@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 
 import { spawn, execFileSync } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 import {
   parseArgs,
+  parseAdversarialReviewArgs,
   DELEGATE_OPTION_CONFIG,
   DELEGATE_WORKER_OPTION_CONFIG,
   SETUP_OPTION_CONFIG,
@@ -41,8 +44,10 @@ import {
   formatAge
 } from "./lib/render.mjs";
 import { runSetupChecks, renderSetupResult } from "./lib/setup.mjs";
+import { validateAdversarialReviewResult } from "./lib/schema-validator.mjs";
 import { captureWorkspaceSnapshot, evaluateWorkspaceGuard, isGitWorkspace } from "./lib/workspace-guard.mjs";
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SESSION_ID_ENV = "MCODE_CLAUDE_SESSION_ID";
 
 function printUsage() {
@@ -51,6 +56,7 @@ function printUsage() {
     "  node scripts/mcode-companion.mjs delegate [--read-only] [--full] [--resume] [--fresh] [--model <model>] [--effort <effort>] [--json] <task>",
     "  node scripts/mcode-companion.mjs resume-candidate [--json]",
     "  node scripts/mcode-companion.mjs review [--wait] [--background] [--json]",
+    "  node scripts/mcode-companion.mjs adversarial-review [--base <ref> | --plan <path>] [--wait | --background] [--json] [focus text…]",
     "  node scripts/mcode-companion.mjs setup [--json]",
     "  node scripts/mcode-companion.mjs status [job-id] [--all] [--json]",
     "  node scripts/mcode-companion.mjs result [job-id] [--all] [--json]",
@@ -70,7 +76,7 @@ function buildJobRecord({
   kind,
   title,
   prompt = null,
-  command,
+  command = null,
   cwd,
   workspace,
   sessionId = null,
@@ -79,7 +85,8 @@ function buildJobRecord({
   permission = "smart",
   model = null,
   effort = null,
-  mcodeSessionId = null
+  mcodeSessionId = null,
+  outputSchema = null
 }) {
   const now = new Date().toISOString();
   return {
@@ -97,6 +104,7 @@ function buildJobRecord({
     model,
     effort,
     mcodeSessionId,
+    outputSchema,
     status: isBackground ? "queued" : "running",
     reason: null,
     output: null,
@@ -156,6 +164,7 @@ async function executeJob(job, workspaceRoot, onProgress = () => {}) {
       effort: job.effort,
       session: job.mcodeSessionId || undefined,
       prompt: mcodePrompt,
+      outputSchema: job.outputSchema,
       onProgress
     });
   } catch (err) {
@@ -195,6 +204,25 @@ async function executeJob(job, workspaceRoot, onProgress = () => {}) {
     job.mcodeSessionId = outcome.mcodeSessionId;
   }
   job.stderr = outcome.stderr;
+
+  if (job.kind === "adversarial-review") {
+    if (outcome.error?.code === "STRUCTURED_OUTPUT_INVALID" || outcome.reason === "schema-invalid") {
+      job.status = "failed";
+      job.reason = "schema-invalid";
+      job.output = null;
+    } else if (job.status === "completed") {
+      const validation = validateAdversarialReviewResult(job.output);
+      if (!validation.valid) {
+        job.status = "failed";
+        job.reason = "schema-invalid";
+        job.error = { message: validation.error };
+        job.output = null;
+      } else {
+        job.output = validation.value;
+      }
+    }
+  }
+
   job.renderedOutput = renderDelegationResult(job);
 
   saveJob(workspaceRoot, job);
@@ -701,6 +729,310 @@ async function handleReview(rawTokens) {
   }
 }
 
+// debt: naive threshold of 2000 changed lines and 200 KB diff text; replace with adaptive sizing once benchmarked
+const DIFF_LINE_LIMIT = 2000;
+const DIFF_BYTE_LIMIT = 200 * 1024;
+
+function collectWorkingTreeChanges(workspaceRoot) {
+  let statusOutput;
+  try {
+    statusOutput = execFileSync("git", ["-C", workspaceRoot, "status", "--porcelain"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"]
+    });
+  } catch {
+    console.error("Error: git status failed.");
+    process.exit(1);
+  }
+
+  if (!statusOutput.trim()) {
+    return { hasChanges: false, message: "No uncommitted changes to review." };
+  }
+
+  const untrackedFiles = statusOutput
+    .split("\n")
+    .filter((l) => l.startsWith("?? "))
+    .map((l) => l.slice(3).trim())
+    .filter(Boolean);
+
+  let trackedDiff = "";
+  try {
+    trackedDiff = execFileSync("git", ["-C", workspaceRoot, "diff", "HEAD"], {
+      encoding: "utf8",
+      maxBuffer: 20 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"]
+    });
+  } catch {
+    try {
+      trackedDiff = execFileSync("git", ["-C", workspaceRoot, "diff"], {
+        encoding: "utf8",
+        maxBuffer: 20 * 1024 * 1024,
+        stdio: ["ignore", "pipe", "ignore"]
+      });
+    } catch {}
+  }
+
+  let totalLines = trackedDiff ? trackedDiff.split("\n").length : 0;
+  let totalBytes = Buffer.byteLength(trackedDiff, "utf8");
+
+  const untrackedEntries = [];
+  for (const relPath of untrackedFiles) {
+    const fullPath = path.resolve(workspaceRoot, relPath);
+    try {
+      const content = fs.readFileSync(fullPath, "utf8");
+      totalLines += content.split("\n").length;
+      totalBytes += Buffer.byteLength(content, "utf8");
+      untrackedEntries.push({ path: relPath, content });
+    } catch {
+      untrackedEntries.push({ path: relPath, content: null });
+    }
+  }
+
+  const isSmall = totalLines <= DIFF_LINE_LIMIT && totalBytes <= DIFF_BYTE_LIMIT;
+  let diffOrContent = "";
+
+  if (isSmall) {
+    const parts = [];
+    if (trackedDiff.trim()) {
+      parts.push("Tracked changes diff:\n" + trackedDiff.trim());
+    }
+    for (const u of untrackedEntries) {
+      if (u.content !== null) {
+        parts.push(`=== Untracked file: ${u.path} ===\n${u.content.trim()}`);
+      }
+    }
+    diffOrContent = parts.join("\n\n");
+  } else {
+    let nameStatus = "";
+    try {
+      nameStatus = execFileSync("git", ["-C", workspaceRoot, "diff", "--name-status", "HEAD"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"]
+      }).trim();
+    } catch {}
+
+    const changedFiles = [];
+    if (nameStatus) changedFiles.push(nameStatus);
+    for (const u of untrackedFiles) {
+      changedFiles.push(`??\t${u}`);
+    }
+
+    diffOrContent = [
+      `Changes exceed inline threshold (${totalLines} lines, ${Math.round(totalBytes / 1024)} KB).`,
+      "Changed files:",
+      changedFiles.join("\n"),
+      "",
+      "Use read-only git commands to inspect the changes:",
+      "  git diff HEAD",
+      "  git status --porcelain"
+    ].join("\n");
+  }
+
+  return {
+    hasChanges: true,
+    targetDescription: "Working tree uncommitted changes",
+    diffOrContent
+  };
+}
+
+function collectBranchChanges(workspaceRoot, baseRef) {
+  try {
+    execFileSync("git", ["-C", workspaceRoot, "rev-parse", "--verify", `${baseRef}^{commit}`], {
+      stdio: ["ignore", "ignore", "ignore"]
+    });
+  } catch {
+    console.error(`Error: Invalid base ref: "${baseRef}".`);
+    process.exit(1);
+  }
+
+  let branchDiff = "";
+  try {
+    branchDiff = execFileSync("git", ["-C", workspaceRoot, "diff", `${baseRef}...HEAD`], {
+      encoding: "utf8",
+      maxBuffer: 20 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"]
+    });
+  } catch (err) {
+    console.error(`Error: git diff failed: ${err.message}`);
+    process.exit(1);
+  }
+
+  if (!branchDiff.trim()) {
+    return { hasChanges: false, message: `No changes between ${baseRef} and HEAD.` };
+  }
+
+  const diffLines = branchDiff.split("\n").length;
+  const diffBytes = Buffer.byteLength(branchDiff, "utf8");
+  const isSmall = diffLines <= DIFF_LINE_LIMIT && diffBytes <= DIFF_BYTE_LIMIT;
+
+  let diffOrContent = "";
+  if (isSmall) {
+    diffOrContent = `Branch diff (${baseRef}...HEAD):\n${branchDiff.trim()}`;
+  } else {
+    let nameStatus = "";
+    try {
+      nameStatus = execFileSync("git", ["-C", workspaceRoot, "diff", "--name-status", `${baseRef}...HEAD`], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"]
+      }).trim();
+    } catch {}
+
+    diffOrContent = [
+      `Changes exceed inline threshold (${diffLines} lines, ${Math.round(diffBytes / 1024)} KB).`,
+      "Changed files:",
+      nameStatus,
+      "",
+      "Use read-only git command to inspect the changes:",
+      `  git diff ${baseRef}...HEAD`
+    ].join("\n");
+  }
+
+  return {
+    hasChanges: true,
+    targetDescription: `Branch changes compared to base '${baseRef}' (${baseRef}...HEAD)`,
+    diffOrContent
+  };
+}
+
+function collectPlanChanges(invocationCwd, planPath) {
+  const resolvedPlanPath = path.resolve(invocationCwd, planPath);
+  let planContent;
+  try {
+    planContent = fs.readFileSync(resolvedPlanPath, "utf8");
+  } catch {
+    console.error(`Error: Plan file "${planPath}" not found or unreadable.`);
+    process.exit(1);
+  }
+
+  const planLines = planContent.split("\n").length;
+  const planBytes = Buffer.byteLength(planContent, "utf8");
+  const isSmall = planLines <= DIFF_LINE_LIMIT && planBytes <= DIFF_BYTE_LIMIT;
+
+  let diffOrContent = "";
+  if (isSmall) {
+    diffOrContent = `Plan document content:\n${planContent.trim()}`;
+  } else {
+    diffOrContent = [
+      `Plan document exceeds inline threshold (${planLines} lines, ${Math.round(planBytes / 1024)} KB).`,
+      "Read the full plan document using read-only tools at absolute path:",
+      `  ${resolvedPlanPath}`
+    ].join("\n");
+  }
+
+  return {
+    hasChanges: true,
+    targetDescription: `Plan document: ${planPath}`,
+    diffOrContent
+  };
+}
+
+async function handleAdversarialReview(rawTokens) {
+  let parsed;
+  try {
+    parsed = parseAdversarialReviewArgs(rawTokens);
+  } catch (err) {
+    console.error(`Error: ${err.message}`);
+    process.exit(1);
+  }
+
+  const { options, focus } = parsed;
+  const invocationCwd = process.cwd();
+
+  let targetInfo;
+  let workspaceRoot;
+
+  if (options.plan) {
+    const inGit = isGitWorkspace(invocationCwd);
+    workspaceRoot = inGit ? resolveWorkspaceRoot(invocationCwd) : invocationCwd;
+    targetInfo = collectPlanChanges(invocationCwd, options.plan);
+  } else if (options.base) {
+    if (!isGitWorkspace(invocationCwd)) {
+      console.error("Error: Not a git repository.");
+      process.exit(1);
+    }
+    workspaceRoot = resolveWorkspaceRoot(invocationCwd);
+    targetInfo = collectBranchChanges(workspaceRoot, options.base);
+  } else {
+    if (!isGitWorkspace(invocationCwd)) {
+      console.error("Error: Not a git repository.");
+      process.exit(1);
+    }
+    workspaceRoot = resolveWorkspaceRoot(invocationCwd);
+    targetInfo = collectWorkingTreeChanges(workspaceRoot);
+  }
+
+  if (!targetInfo.hasChanges) {
+    if (options.json) {
+      console.log(JSON.stringify({
+        hasChanges: false,
+        message: targetInfo.message
+      }, null, 2));
+    } else {
+      console.log(targetInfo.message);
+    }
+    return;
+  }
+
+  const promptTemplatePath = path.resolve(__dirname, "../prompts/adversarial-review.md");
+  let promptTemplate = "";
+  try {
+    promptTemplate = fs.readFileSync(promptTemplatePath, "utf8");
+  } catch (err) {
+    console.error(`Error: Prompt template missing at ${promptTemplatePath}`);
+    process.exit(1);
+  }
+
+  const prompt = promptTemplate
+    .replace("{{TARGET}}", targetInfo.targetDescription)
+    .replace("{{FOCUS}}", focus || "None")
+    .replace("{{DIFF_OR_CONTENT}}", targetInfo.diffOrContent);
+
+  const schemaPath = path.resolve(__dirname, "../schemas/adversarial-review.json");
+  const isBackground = Boolean(options.background);
+  const jobId = generateJobId("adversarial-review");
+  const currentSessionId = process.env[SESSION_ID_ENV] || null;
+
+  const job = buildJobRecord({
+    id: jobId,
+    kind: "adversarial-review",
+    title: `Adversarial review: ${targetInfo.targetDescription}`,
+    prompt,
+    cwd: workspaceRoot,
+    workspace: workspaceRoot,
+    sessionId: currentSessionId,
+    isBackground,
+    readOnly: true,
+    permission: "smart",
+    outputSchema: schemaPath
+  });
+
+  saveJob(workspaceRoot, job);
+
+  if (isBackground) {
+    launchBackgroundWorker(job, workspaceRoot, `Queued adversarial review of ${targetInfo.targetDescription}`, options.json);
+    return;
+  }
+
+  appendJobLog(workspaceRoot, jobId, `Starting adversarial review of ${targetInfo.targetDescription}`);
+
+  const outcome = await executeJob(job, workspaceRoot, (line) => {
+    appendJobLog(workspaceRoot, jobId, line);
+    if (!options.json) {
+      process.stderr.write(`[mcode] ${line}\n`);
+    }
+  });
+
+  if (options.json) {
+    console.log(JSON.stringify(buildJobJsonPayload(job), null, 2));
+  } else {
+    process.stdout.write(job.renderedOutput);
+  }
+
+  if (job.status !== "completed") {
+    process.exit(outcome.exitCode && outcome.exitCode !== 0 ? outcome.exitCode : 1);
+  }
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   const subcommand = argv[0];
@@ -727,6 +1059,11 @@ async function main() {
 
   if (subcommand === "review") {
     await handleReview(argv.slice(1));
+    return;
+  }
+
+  if (subcommand === "adversarial-review") {
+    await handleAdversarialReview(argv.slice(1));
     return;
   }
 

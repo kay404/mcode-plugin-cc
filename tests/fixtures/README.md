@@ -16,6 +16,10 @@ This directory contains streaming JSONL fixtures used by the test harness to sim
 - **`provider-list-none-active.json`**: Fake fixture containing no active providers.
 - **`review-needs-changes.stream.jsonl`**: Real (recorded with `mcode` 0.6.12 running `mcode exec review --cwd <git toplevel> --permission smart --output-format stream-json` on uncommitted changes with a planted bug; scrubbed and trimmed of `item.updated` streaming deltas).
 - **`review-pass.stream.jsonl`**: Real (recorded with `mcode` 0.6.12 running `mcode exec review --cwd <git toplevel> --permission smart --output-format stream-json` on clean uncommitted changes; scrubbed and trimmed of `item.updated` streaming deltas).
+- **`adversarial-review-working-tree.stream.jsonl`**: Real (recorded with `mcode` 0.6.12 running `mcode exec --cwd <git toplevel> --permission smart --output-format stream-json --output-schema <schema-path> --input -` on uncommitted working-tree changes with a planted bug; scrubbed and trimmed of `item.updated` streaming deltas).
+- **`adversarial-review-branch.stream.jsonl`**: Real (recorded with `mcode` 0.6.12 running `mcode exec --cwd <git toplevel> --permission smart --output-format stream-json --output-schema <schema-path> --input -` on branch changes against base `main` with a planted bug; scrubbed and trimmed of `item.updated` streaming deltas).
+- **`adversarial-review-plan.stream.jsonl`**: Real (recorded with `mcode` 0.6.12 running `mcode exec --cwd <git toplevel> --permission smart --output-format stream-json --output-schema <schema-path> --input -` on a plan document with planted defects; scrubbed and trimmed of `item.updated` streaming deltas).
+- **`adversarial-review-schema-invalid.stream.jsonl`**: Real (recorded with `mcode` 0.6.12 running with `--output-schema` where model emitted output that failed schema validation; scrubbed and trimmed of `item.updated` streaming deltas).
 
 ## Smart-Permission Behaviour Finding
 
@@ -37,3 +41,9 @@ Probing `mcode exec review --cwd <git toplevel> --output-format stream-json` wit
 1. `mcode exec review` accepts `--permission full` without error. Whether it changes which tools run during a review was not observed.
 2. Under `--permission smart`, tool actions that would prompt for approval in interactive mode (such as executing arbitrary node scripts or out-of-bounds writes) fail with `HOST_CAPABILITY_UNAVAILABLE: this Runtime host cannot prompt for permission.`, which mcode recovers from.
 3. Under both `--permission smart` and `--permission full`, `mcode exec review` did not edit or revert the planted bug in the working tree (`git diff` remained byte-identical before and after). The built-in review intent limits itself to inspecting files and returning findings rather than modifying files.
+
+## Adversarial Review & Output Schema Behaviour Finding
+
+Probing `mcode exec --output-schema <path> --output-format stream-json` across working tree, branch, and plan targets showed:
+1. When execution succeeds, `exec.completed` delivers the structured answer as a parsed JSON object in `event.result.output` (not a JSON string), matching the schema properties (`verdict`, `summary`, `findings`, `next_steps`). `result.status` is `"succeeded"` and the process exits with code 0.
+2. When the model output does not conform to `--output-schema` or cannot be parsed as JSON, `mcode` fails the run itself. In `exec.completed`, `result.status` is `"failed"` and `result.error` has `code: "STRUCTURED_OUTPUT_INVALID"`, `category: "runtime"`, and `message` detailing the missing properties or JSON error. `result.output` is undefined. The process exits with code 4 and logs the failure to stderr.
