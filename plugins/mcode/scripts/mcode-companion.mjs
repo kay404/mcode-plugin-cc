@@ -4,6 +4,7 @@ import process from "node:process";
 import {
   parseArgs,
   DELEGATE_OPTION_CONFIG,
+  SETUP_OPTION_CONFIG,
   STATUS_OPTION_CONFIG,
   RESULT_OPTION_CONFIG
 } from "./lib/args.mjs";
@@ -26,6 +27,7 @@ import {
   renderJobDetail,
   buildJobJsonPayload
 } from "./lib/render.mjs";
+import { runSetupChecks, renderSetupResult } from "./lib/setup.mjs";
 import { captureWorkspaceSnapshot, evaluateWorkspaceGuard } from "./lib/workspace-guard.mjs";
 
 const SESSION_ID_ENV = "MCODE_CLAUDE_SESSION_ID";
@@ -34,6 +36,7 @@ function printUsage() {
   console.log([
     "Usage:",
     "  node scripts/mcode-companion.mjs delegate [--read-only] [--full] [--model <model>] [--effort <effort>] [--json] <task>",
+    "  node scripts/mcode-companion.mjs setup [--json]",
     "  node scripts/mcode-companion.mjs status [job-id] [--all] [--json]",
     "  node scripts/mcode-companion.mjs result [job-id] [--all] [--json]"
   ].join("\n"));
@@ -164,6 +167,36 @@ async function handleDelegate(rawTokens) {
   }
 }
 
+async function handleSetup(rawTokens) {
+  let parsed;
+  try {
+    const tokens = splitSubcommandArgs(rawTokens);
+    parsed = parseArgs(tokens, SETUP_OPTION_CONFIG);
+  } catch (err) {
+    console.error(`Error: ${err.message}`);
+    process.exit(1);
+  }
+
+  const nonWhitespacePositionals = parsed.positionals.filter((p) => p.trim());
+  if (nonWhitespacePositionals.length > 0) {
+    console.error(`Unexpected argument: "${nonWhitespacePositionals[0]}". setup takes no positional arguments.`);
+    process.exit(1);
+  }
+
+  const result = runSetupChecks();
+
+  if (parsed.options.json) {
+    console.log(JSON.stringify(result, null, 2));
+  } else {
+    process.stdout.write(renderSetupResult(result));
+  }
+
+  const isReady = result.verdict === "ready" || result.verdict === "ready (login unverified)";
+  if (!isReady) {
+    process.exit(1);
+  }
+}
+
 async function handleStatus(rawTokens) {
   let parsed;
   try {
@@ -272,6 +305,11 @@ async function main() {
 
   if (subcommand === "delegate") {
     await handleDelegate(argv.slice(1));
+    return;
+  }
+
+  if (subcommand === "setup") {
+    await handleSetup(argv.slice(1));
     return;
   }
 

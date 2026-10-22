@@ -56,9 +56,11 @@ export function runCompanion(args, options = {}) {
   const recordStdinFile = path.join(pluginDataDir, "recorded-stdin.txt");
 
   const nodeDir = path.dirname(process.execPath);
+  const pathEnv = options.noMcodeOnPath ? `${nodeDir}:/usr/bin:/bin` : `${binDir}:${process.env.PATH}`;
+
   const combinedEnv = {
     ...process.env,
-    PATH: options.noMcodeOnPath ? `${nodeDir}:/usr/bin:/bin` : `${binDir}:${process.env.PATH}`,
+    PATH: pathEnv,
     MCODE_PLUGIN_DATA: pluginDataDir,
     MCODE_CLAUDE_SESSION_ID: options.sessionId ?? "test-claude-session-001",
     MCODE_RECORD_ARGV: recordArgvFile,

@@ -1,6 +1,13 @@
 export const DELEGATE_OPTION_CONFIG = {
   valueOptions: ["model", "effort"],
-  booleanOptions: ["read-only", "full", "json"]
+  booleanOptions: ["read-only", "full", "json"],
+  supportedHint: "--read-only, --full, --model <value>, --effort <value>, --json"
+};
+
+export const SETUP_OPTION_CONFIG = {
+  valueOptions: [],
+  booleanOptions: ["json"],
+  supportedHint: "--json"
 };
 
 export const STATUS_OPTION_CONFIG = {

@@ -1,0 +1,12 @@
+{
+  "minimaxModelSource": "token_plan",
+  "providers": [
+    {
+      "providerId": "custom_provider:magpie",
+      "kind": "custom",
+      "active": true,
+      "enabled": true,
+      "hasApiKey": true
+    }
+  ]
+}
