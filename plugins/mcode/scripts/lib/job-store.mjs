@@ -29,7 +29,7 @@ export function resolveStateDir(cwd = process.cwd()) {
   try {
     canonicalRoot = fs.realpathSync.native(workspaceRoot);
   } catch {
-    canonicalRoot = workspaceRoot;
+    // Keep fallback to workspaceRoot
   }
 
   const slugSource = path.basename(workspaceRoot) || "workspace";
@@ -59,7 +59,7 @@ function defaultState() {
   };
 }
 
-export function generateJobId(kind = "delegate") {
+export function generateJobId(kind) {
   const timestamp = Date.now().toString(36);
   const randomSuffix = Math.random().toString(36).slice(2, 8);
   return `${kind}-${timestamp}-${randomSuffix}`;
@@ -128,26 +128,6 @@ export function saveJob(cwd, job) {
 
   const stateFile = path.join(resolveStateDir(cwd), "state.json");
   fs.writeFileSync(stateFile, JSON.stringify(state, null, 2), "utf8");
-}
-
-export function getJob(cwd, jobId) {
-  const exactFile = resolveJobFile(cwd, jobId);
-  if (fs.existsSync(exactFile)) {
-    return JSON.parse(fs.readFileSync(exactFile, "utf8"));
-  }
-
-  const state = loadState(cwd);
-  const matches = state.jobs.filter((j) => j.id.startsWith(jobId));
-  if (matches.length === 1) {
-    const file = resolveJobFile(cwd, matches[0].id);
-    if (fs.existsSync(file)) {
-      return JSON.parse(fs.readFileSync(file, "utf8"));
-    }
-  } else if (matches.length > 1) {
-    throw new Error(`Ambiguous job id prefix "${jobId}": matches ${matches.map((m) => m.id).join(", ")}`);
-  }
-
-  return null;
 }
 
 export function appendJobLog(cwd, jobId, line) {

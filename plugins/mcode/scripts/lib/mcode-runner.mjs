@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import process from "node:process";
+import { FAILURE_REASONS } from "./failure-reasons.mjs";
 
 export function wrapReadOnlyPrompt(task) {
   return [
@@ -49,7 +50,7 @@ export function buildMcodeArgv(options) {
   return argv;
 }
 
-export function parseProgressEvent(event) {
+export function describeProgress(event) {
   if (!event || typeof event !== "object") {
     return null;
   }
@@ -62,8 +63,7 @@ export function parseProgressEvent(event) {
     const item = event.item;
     if (!item) return null;
     if (item.type === "tool_call") {
-      const toolName = item.toolCall?.name ?? "unknown";
-      return `Running tool: ${toolName}...`;
+      return `Running tool: ${item.toolCall?.name ?? "unknown"}...`;
     }
     if (item.type === "reasoning") {
       return "Thinking...";
@@ -77,8 +77,7 @@ export function parseProgressEvent(event) {
     const item = event.item;
     if (!item) return null;
     if (item.type === "tool_call") {
-      const toolName = item.toolCall?.name ?? "unknown";
-      return `Finished tool: ${toolName}`;
+      return `Finished tool: ${item.toolCall?.name ?? "unknown"}`;
     }
   }
 
@@ -89,14 +88,11 @@ function isNeedsInteraction(error, stderr = "") {
   if (error?.code === "INTERACTION_NOT_AVAILABLE") {
     return true;
   }
+  // debt: substring heuristic; replace with mcode's exact error code once a real pending-session refusal is recorded
   const msg = `${error?.message ?? ""} ${stderr}`.toLowerCase();
-  if (msg.includes("interaction_not_available") || msg.includes("interaction not available")) {
-    return true;
-  }
-  if (msg.includes("pending") && (msg.includes("permission") || msg.includes("questionnaire") || msg.includes("interaction"))) {
-    return true;
-  }
-  return false;
+  return msg.includes("interaction_not_available") ||
+    msg.includes("interaction not available") ||
+    (msg.includes("pending") && (msg.includes("permission") || msg.includes("questionnaire") || msg.includes("interaction")));
 }
 
 export function mapMcodeResultToOutcome(execResult, stderr = "") {
@@ -106,76 +102,39 @@ export function mapMcodeResultToOutcome(execResult, stderr = "") {
       status: "failed",
       reason: interaction ? "needs-interaction" : "error",
       output: null,
-      error: { message: stderr.trim() || "mcode process exited unexpectedly without completion result" },
-      mcodeSessionId: null
+      error: { message: stderr.trim() || FAILURE_REASONS.error.defaultMessage },
+      mcodeSessionId: null,
+      usage: null
     };
   }
 
   const { status, output, error, sessionId, usage } = execResult;
-
-  if (status === "succeeded") {
-    return {
-      status: "completed",
-      reason: null,
-      output: output ?? "",
-      error: null,
-      mcodeSessionId: sessionId ?? null,
-      usage: usage ?? null
-    };
-  }
-
-  if (status === "cancelled") {
-    return {
-      status: "cancelled",
-      reason: null,
-      output: output ?? "",
-      error: error ?? null,
-      mcodeSessionId: sessionId ?? null,
-      usage: usage ?? null
-    };
-  }
-
-  if (status === "timeout") {
-    return {
-      status: "failed",
-      reason: "timeout",
-      output: output ?? null,
-      error: error ?? { message: "mcode execution timed out" },
-      mcodeSessionId: sessionId ?? null,
-      usage: usage ?? null
-    };
-  }
-
-  if (status === "limit_exceeded") {
-    return {
-      status: "failed",
-      reason: "limit_exceeded",
-      output: output ?? null,
-      error: error ?? { message: "mcode execution exceeded step limit" },
-      mcodeSessionId: sessionId ?? null,
-      usage: usage ?? null
-    };
-  }
-
-  if (isNeedsInteraction(error, stderr)) {
-    return {
-      status: "failed",
-      reason: "needs-interaction",
-      output: output ?? null,
-      error: error ?? { message: "Interactive input or permission required in TUI" },
-      mcodeSessionId: sessionId ?? null,
-      usage: usage ?? null
-    };
-  }
-
-  return {
+  const base = {
     status: "failed",
     reason: "error",
     output: output ?? null,
-    error: error ?? { message: stderr.trim() || "mcode execution failed" },
+    error: error ?? null,
     mcodeSessionId: sessionId ?? null,
     usage: usage ?? null
   };
+
+  if (status === "succeeded") {
+    return { ...base, status: "completed", reason: null, output: output ?? "", error: null };
+  }
+  if (status === "cancelled") {
+    return { ...base, status: "cancelled", reason: null, output: output ?? "" };
+  }
+  if (status === "timeout") {
+    return { ...base, reason: "timeout", error: error ?? { message: FAILURE_REASONS.timeout.defaultMessage } };
+  }
+  if (status === "limit_exceeded") {
+    return { ...base, reason: "limit-exceeded", error: error ?? { message: FAILURE_REASONS["limit-exceeded"].defaultMessage } };
+  }
+  if (isNeedsInteraction(error, stderr)) {
+    return { ...base, reason: "needs-interaction", error: error ?? { message: FAILURE_REASONS["needs-interaction"].defaultMessage } };
+  }
+
+  return { ...base, error: error ?? { message: stderr.trim() || FAILURE_REASONS.error.defaultMessage } };
 }
 
 export async function runMcode(options) {
@@ -188,15 +147,46 @@ export async function runMcode(options) {
     let stderr = "";
     let stdoutBuffer = "";
 
+    function processLine(line) {
+      const trimmed = line.trim();
+      if (!trimmed) return;
+
+      let event;
+      try {
+        event = JSON.parse(trimmed);
+      } catch {
+        return;
+      }
+
+      if (event.sessionId) {
+        capturedSessionId = event.sessionId;
+      }
+
+      if (event.schemaVersion !== 1) {
+        child.kill();
+        const err = new Error(`Unsupported mcode output version: ${event.schemaVersion}`);
+        err.reason = "unsupported-output-version";
+        err.sessionId = capturedSessionId;
+        return reject(err);
+      }
+
+      if (event.type === "exec.completed") {
+        execCompletedResult = event.result ?? null;
+        if (execCompletedResult?.sessionId) {
+          capturedSessionId = execCompletedResult.sessionId;
+        }
+      }
+
+      const progressMsg = describeProgress(event);
+      if (progressMsg) {
+        onProgress(progressMsg);
+      }
+    }
+
     const child = spawn("mcode", argv, {
       cwd: options.cwd ?? process.cwd(),
-      env: options.env ?? process.env,
       stdio: ["pipe", "pipe", "pipe"]
     });
-
-    if (options.onSpawn) {
-      options.onSpawn(child);
-    }
 
     if (options.prompt) {
       child.stdin.end(options.prompt, "utf8");
@@ -208,40 +198,8 @@ export async function runMcode(options) {
       stdoutBuffer += chunk.toString("utf8");
       const lines = stdoutBuffer.split("\n");
       stdoutBuffer = lines.pop() ?? "";
-
       for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-
-        let event;
-        try {
-          event = JSON.parse(trimmed);
-        } catch {
-          continue;
-        }
-
-        if (event.schemaVersion !== 1) {
-          child.kill();
-          const err = new Error(`Unsupported mcode output version: ${event.schemaVersion}`);
-          err.reason = "unsupported-output-version";
-          return reject(err);
-        }
-
-        if (event.sessionId) {
-          capturedSessionId = event.sessionId;
-        }
-
-        if (event.type === "exec.completed") {
-          execCompletedResult = event.result ?? null;
-          if (execCompletedResult?.sessionId) {
-            capturedSessionId = execCompletedResult.sessionId;
-          }
-        }
-
-        const progressMsg = parseProgressEvent(event);
-        if (progressMsg) {
-          onProgress(progressMsg);
-        }
+        processLine(line);
       }
     });
 
@@ -251,7 +209,7 @@ export async function runMcode(options) {
 
     child.on("error", (err) => {
       if (err.code === "ENOENT") {
-        const notFoundErr = new Error("mcode executable was not found on PATH. Run /mcode:setup to check requirements and install instructions.");
+        const notFoundErr = new Error(FAILURE_REASONS["mcode-not-found"].defaultMessage);
         notFoundErr.reason = "mcode-not-found";
         return reject(notFoundErr);
       }
@@ -260,25 +218,7 @@ export async function runMcode(options) {
 
     child.on("close", (exitCode) => {
       if (stdoutBuffer.trim()) {
-        try {
-          const event = JSON.parse(stdoutBuffer.trim());
-          if (event.schemaVersion !== 1) {
-            const err = new Error(`Unsupported mcode output version: ${event.schemaVersion}`);
-            err.reason = "unsupported-output-version";
-            return reject(err);
-          }
-          if (event.sessionId) {
-            capturedSessionId = event.sessionId;
-          }
-          if (event.type === "exec.completed") {
-            execCompletedResult = event.result ?? null;
-            if (execCompletedResult?.sessionId) {
-              capturedSessionId = execCompletedResult.sessionId;
-            }
-          }
-        } catch {
-          // Ignore incomplete buffer parse at close
-        }
+        processLine(stdoutBuffer.trim());
       }
 
       const outcome = mapMcodeResultToOutcome(execCompletedResult, stderr);

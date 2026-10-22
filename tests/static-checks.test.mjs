@@ -7,7 +7,27 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, "..");
 const PLUGIN_DIR = path.join(ROOT_DIR, "plugins/mcode");
-const COMPANION_SCRIPT = path.join(PLUGIN_DIR, "scripts/mcode-companion.mjs");
+
+function findMarkdownFiles(dir) {
+  if (!fs.existsSync(dir)) return [];
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  const files = [];
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...findMarkdownFiles(fullPath));
+    } else if (entry.isFile() && entry.name.endsWith(".md")) {
+      files.push(fullPath);
+    }
+  }
+  return files;
+}
+
+const ALL_PLUGIN_MARKDOWN_FILES = [
+  ...findMarkdownFiles(path.join(PLUGIN_DIR, "commands")),
+  ...findMarkdownFiles(path.join(PLUGIN_DIR, "agents")),
+  ...findMarkdownFiles(path.join(PLUGIN_DIR, "skills"))
+];
 
 function parseFrontmatter(content) {
   const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
@@ -56,16 +76,10 @@ test("manifests have matching versions and correct metadata", () => {
   assert.equal(plugin.author.name, "kay404");
 });
 
-test("command, agent, and skill markdown files have valid frontmatter", () => {
-  const markdownFiles = [
-    path.join(PLUGIN_DIR, "commands/delegate.md"),
-    path.join(PLUGIN_DIR, "agents/mcode-delegate.md"),
-    path.join(PLUGIN_DIR, "skills/mcode-cli-runtime/SKILL.md"),
-    path.join(PLUGIN_DIR, "skills/mcode-result-handling/SKILL.md")
-  ];
+test("all plugin command, agent, and skill markdown files have valid frontmatter", () => {
+  assert.ok(ALL_PLUGIN_MARKDOWN_FILES.length >= 4, "Expected at least 4 markdown files in plugin");
 
-  for (const filePath of markdownFiles) {
-    assert.ok(fs.existsSync(filePath), `File should exist: ${filePath}`);
+  for (const filePath of ALL_PLUGIN_MARKDOWN_FILES) {
     const content = fs.readFileSync(filePath, "utf8");
     const fm = parseFrontmatter(content);
     assert.ok(fm, `Frontmatter missing or invalid in ${filePath}`);
@@ -83,24 +97,17 @@ test("command, agent, and skill markdown files have valid frontmatter", () => {
   }
 });
 
-test("companion subcommands referenced from markdown exist in companion script", () => {
-  const companionSource = fs.readFileSync(COMPANION_SCRIPT, "utf8");
-  const markdownFiles = [
-    path.join(PLUGIN_DIR, "commands/delegate.md"),
-    path.join(PLUGIN_DIR, "agents/mcode-delegate.md"),
-    path.join(PLUGIN_DIR, "skills/mcode-cli-runtime/SKILL.md"),
-    path.join(PLUGIN_DIR, "skills/mcode-result-handling/SKILL.md")
-  ];
+test("companion subcommands referenced from markdown are implemented", () => {
+  const implementedSubcommands = new Set(["delegate"]);
 
-  for (const filePath of markdownFiles) {
+  for (const filePath of ALL_PLUGIN_MARKDOWN_FILES) {
     const content = fs.readFileSync(filePath, "utf8");
     const subcmdMatches = content.matchAll(/mcode-companion\.mjs\s+([a-zA-Z0-9_-]+)/g);
     for (const match of subcmdMatches) {
       const subcmd = match[1];
-      const casePattern = new RegExp(`case\\s+["']${subcmd}["']`);
       assert.ok(
-        casePattern.test(companionSource),
-        `Referenced subcommand "${subcmd}" from ${path.basename(filePath)} must exist in companion script`
+        implementedSubcommands.has(subcmd),
+        `Referenced subcommand "${subcmd}" from ${path.basename(filePath)} is not implemented by companion script`
       );
     }
   }

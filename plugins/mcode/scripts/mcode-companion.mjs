@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import process from "node:process";
-import { parseArgs, splitRawArgumentString } from "./lib/args.mjs";
+import { parseArgs, DELEGATE_OPTION_CONFIG } from "./lib/args.mjs";
 import {
   generateJobId,
   saveJob,
@@ -14,43 +14,29 @@ import { renderDelegationResult, buildJobJsonPayload } from "./lib/render.mjs";
 function printUsage() {
   console.log([
     "Usage:",
-    "  node scripts/mcode-companion.mjs delegate [options] [task]",
-    "  node scripts/mcode-companion.mjs setup [--json]",
-    "  node scripts/mcode-companion.mjs review [--wait|--background] [--base <ref>]",
-    "  node scripts/mcode-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--plan <path>] [focus]",
-    "  node scripts/mcode-companion.mjs status [job-id] [--all] [--json]",
-    "  node scripts/mcode-companion.mjs result [job-id] [--json]",
-    "  node scripts/mcode-companion.mjs cancel [job-id] [--json]"
+    "  node scripts/mcode-companion.mjs delegate [--read-only] [--full] [--model <model>] [--effort <effort>] [--json] <task>"
   ].join("\n"));
 }
 
 async function handleDelegate(rawTokens) {
-  const { options, positionals } = parseArgs(rawTokens, {
-    valueOptions: ["model", "effort", "session", "raw-arguments"],
-    booleanOptions: ["json", "full", "read-only", "background", "resume", "fresh"]
-  });
-
-  let effectiveOptions = { ...options };
-  let effectivePositionals = [...positionals];
-
-  if (options["raw-arguments"]) {
-    const splitTokens = splitRawArgumentString(options["raw-arguments"]);
-    const parsedRaw = parseArgs(splitTokens, {
-      valueOptions: ["model", "effort", "session"],
-      booleanOptions: ["json", "full", "read-only", "background", "resume", "fresh"]
-    });
-    effectiveOptions = { ...effectiveOptions, ...parsedRaw.options };
-    effectivePositionals = [...effectivePositionals, ...parsedRaw.positionals];
+  let parsed;
+  try {
+    parsed = parseArgs(rawTokens, DELEGATE_OPTION_CONFIG);
+  } catch (err) {
+    console.error(`Error: ${err.message}`);
+    process.exit(1);
   }
 
-  const prompt = effectivePositionals.join(" ").trim();
+  const { options, positionals } = parsed;
+
+  const prompt = positionals.join(" ").trim();
   if (!prompt) {
     console.error("Error: Task prompt is required for delegation.");
     process.exit(1);
   }
 
-  const permission = effectiveOptions.full ? "full" : "smart";
-  const readOnly = Boolean(effectiveOptions["read-only"]);
+  const permission = options.full ? "full" : "smart";
+  const readOnly = Boolean(options["read-only"]);
   const mcodePrompt = readOnly ? wrapReadOnlyPrompt(prompt) : prompt;
 
   const invocationCwd = process.cwd();
@@ -66,9 +52,9 @@ async function handleDelegate(rawTokens) {
     sessionId: process.env.CLAUDE_SESSION_ID ?? null,
     readOnly,
     permission,
-    model: effectiveOptions.model ?? null,
-    effort: effectiveOptions.effort ?? null,
-    mcodeSessionId: effectiveOptions.session ?? null,
+    model: options.model ?? null,
+    effort: options.effort ?? null,
+    mcodeSessionId: null,
     status: "running",
     reason: null,
     output: null,
@@ -86,13 +72,12 @@ async function handleDelegate(rawTokens) {
     outcome = await runMcode({
       cwd: invocationCwd,
       permission,
-      model: effectiveOptions.model,
-      effort: effectiveOptions.effort,
-      session: effectiveOptions.session,
+      model: options.model,
+      effort: options.effort,
       prompt: mcodePrompt,
       onProgress: (line) => {
         appendJobLog(workspaceRoot, jobId, line);
-        if (!effectiveOptions.json) {
+        if (!options.json) {
           process.stderr.write(`[mcode] ${line}\n`);
         }
       }
@@ -100,10 +85,10 @@ async function handleDelegate(rawTokens) {
   } catch (err) {
     outcome = {
       status: "failed",
-      reason: err.reason || (err.code === "ENOENT" ? "mcode-not-found" : "error"),
+      reason: err.reason || "error",
       output: null,
       error: { message: err.message },
-      mcodeSessionId: effectiveOptions.session ?? null,
+      mcodeSessionId: err.sessionId ?? null,
       exitCode: 1,
       stderr: err.message
     };
@@ -122,7 +107,7 @@ async function handleDelegate(rawTokens) {
   saveJob(workspaceRoot, job);
   appendJobLog(workspaceRoot, jobId, `Completed with status ${job.status}${job.reason ? ` (${job.reason})` : ""}`);
 
-  if (effectiveOptions.json) {
+  if (options.json) {
     console.log(JSON.stringify(buildJobJsonPayload(job), null, 2));
   } else {
     process.stdout.write(renderDelegationResult(job));
@@ -142,28 +127,13 @@ async function main() {
     process.exit(0);
   }
 
-  const subArgs = argv.slice(1);
-
-  switch (subcommand) {
-    case "delegate":
-      await handleDelegate(subArgs);
-      break;
-    case "setup":
-    case "review":
-    case "adversarial-review":
-    case "status":
-    case "result":
-    case "cancel":
-    case "delegate-worker":
-    case "resume-candidate":
-      console.error(`Subcommand "${subcommand}" is reserved for subsequent tickets.`);
-      process.exit(1);
-      break;
-    default:
-      console.error(`Unknown subcommand: "${subcommand}"`);
-      printUsage();
-      process.exit(1);
+  if (subcommand !== "delegate") {
+    console.error(`Unknown subcommand: "${subcommand}"`);
+    printUsage();
+    process.exit(1);
   }
+
+  await handleDelegate(argv.slice(1));
 }
 
 main().catch((err) => {

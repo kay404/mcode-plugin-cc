@@ -1,7 +1,13 @@
+export const DELEGATE_OPTION_CONFIG = {
+  valueOptions: ["model", "effort"],
+  booleanOptions: ["read-only", "full", "json"]
+};
+
+const SUPPORTED_OPTIONS_HINT = "--read-only, --full, --model <value>, --effort <value>, --json";
+
 export function parseArgs(argv, config = {}) {
   const valueOptions = new Set(config.valueOptions ?? []);
   const booleanOptions = new Set(config.booleanOptions ?? []);
-  const aliasMap = config.aliasMap ?? {};
   const options = {};
   const positionals = [];
   let passthrough = false;
@@ -26,109 +32,46 @@ export function parseArgs(argv, config = {}) {
 
     if (token.startsWith("--")) {
       const [rawKey, inlineVal] = token.slice(2).split("=", 2);
-      const key = aliasMap[rawKey] ?? rawKey;
 
-      if (booleanOptions.has(key)) {
-        options[key] = inlineVal === undefined ? true : inlineVal !== "false";
+      if (booleanOptions.has(rawKey)) {
+        options[rawKey] = inlineVal === undefined ? true : inlineVal !== "false";
         continue;
       }
 
-      if (valueOptions.has(key)) {
+      if (valueOptions.has(rawKey)) {
         const val = inlineVal ?? argv[i + 1];
         if (val === undefined) {
           throw new Error(`Missing value for --${rawKey}`);
         }
-        options[key] = val;
+        options[rawKey] = val;
         if (inlineVal === undefined) {
           i += 1;
         }
         continue;
       }
 
-      positionals.push(token);
-      continue;
+      throw new Error(`Unsupported option: --${rawKey}. Supported options: ${SUPPORTED_OPTIONS_HINT}`);
     }
 
     const shortKey = token.slice(1);
-    const key = aliasMap[shortKey] ?? shortKey;
 
-    if (booleanOptions.has(key)) {
-      options[key] = true;
+    if (booleanOptions.has(shortKey)) {
+      options[shortKey] = true;
       continue;
     }
 
-    if (valueOptions.has(key)) {
+    if (valueOptions.has(shortKey)) {
       const val = argv[i + 1];
       if (val === undefined) {
         throw new Error(`Missing value for -${shortKey}`);
       }
-      options[key] = val;
+      options[shortKey] = val;
       i += 1;
       continue;
     }
 
-    positionals.push(token);
+    throw new Error(`Unsupported option: -${shortKey}. Supported options: ${SUPPORTED_OPTIONS_HINT}`);
   }
 
   return { options, positionals };
-}
-
-export function splitRawArgumentString(raw) {
-  if (!raw) {
-    return [];
-  }
-
-  const tokens = [];
-  let current = "";
-  let quote = null;
-  let escaping = false;
-
-  for (let i = 0; i < raw.length; i += 1) {
-    const char = raw[i];
-
-    if (escaping) {
-      current += char;
-      escaping = false;
-      continue;
-    }
-
-    if (char === "\\") {
-      escaping = true;
-      continue;
-    }
-
-    if (quote) {
-      if (char === quote) {
-        quote = null;
-      } else {
-        current += char;
-      }
-      continue;
-    }
-
-    if (char === "'" || char === "\"") {
-      quote = char;
-      continue;
-    }
-
-    if (/\s/.test(char)) {
-      if (current.length > 0) {
-        tokens.push(current);
-        current = "";
-      }
-      continue;
-    }
-
-    current += char;
-  }
-
-  if (escaping) {
-    current += "\\";
-  }
-
-  if (current.length > 0) {
-    tokens.push(current);
-  }
-
-  return tokens;
 }

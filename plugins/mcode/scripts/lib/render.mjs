@@ -1,3 +1,5 @@
+import { FAILURE_REASONS } from "./failure-reasons.mjs";
+
 export function renderDelegationResult(job) {
   const sessionId = job.mcodeSessionId;
   const sessionFooter = sessionId
@@ -13,52 +15,21 @@ export function renderDelegationResult(job) {
     return `mcode delegation was cancelled.${sessionFooter}\n`;
   }
 
-  if (job.status === "failed") {
-    if (job.reason === "mcode-not-found") {
-      return [
-        "mcode was not found on PATH.",
-        "",
-        "Please install mcode or run /mcode:setup to check requirements and installation instructions.",
-        ""
-      ].join("\n");
-    }
+  const reasonConfig = FAILURE_REASONS[job.reason] ?? FAILURE_REASONS.error;
 
-    if (job.reason === "unsupported-output-version") {
-      const err = job.error?.message || "The mcode version emitted an unrecognized output stream schema.";
-      return [
-        "Unsupported mcode output version.",
-        "",
-        err,
-        ""
-      ].join("\n");
-    }
-
-    if (job.reason === "needs-interaction") {
-      const command = sessionId ? `mcode --session ${sessionId}` : "mcode";
-      return [
-        "mcode requires interaction that is not available in headless mode.",
-        "",
-        "To continue this session interactively, run:",
-        `  ${command}`,
-        ""
-      ].join("\n");
-    }
-
-    if (job.reason === "timeout") {
-      const err = job.error?.message || "Operation timed out.";
-      return `mcode delegation timed out.\n\n${err}${sessionFooter}\n`;
-    }
-
-    if (job.reason === "limit_exceeded") {
-      const err = job.error?.message || "Step limit exceeded.";
-      return `mcode delegation exceeded step limit.\n\n${err}${sessionFooter}\n`;
-    }
-
-    const err = job.error?.message || job.stderr || "Unknown failure.";
-    return `mcode delegation failed.\n\n${err}${sessionFooter}\n`;
+  if (job.reason === "needs-interaction") {
+    const command = sessionId ? `mcode --session ${sessionId}` : "mcode";
+    return [
+      reasonConfig.heading,
+      "",
+      "To continue this session interactively, run:",
+      `  ${command}`,
+      sessionFooter ? sessionFooter.trimStart() : ""
+    ].filter(Boolean).join("\n") + "\n";
   }
 
-  return `Job ${job.id} (${job.status})${sessionFooter}\n`;
+  const err = job.error?.message || job.stderr || reasonConfig.defaultMessage;
+  return `${reasonConfig.heading}\n\n${err}${sessionFooter}\n`;
 }
 
 export function buildJobJsonPayload(job) {

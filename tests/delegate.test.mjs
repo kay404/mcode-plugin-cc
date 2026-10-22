@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -43,54 +43,28 @@ function runCompanion(args, options = {}) {
   };
 
   const cwd = options.cwd ?? ROOT_DIR;
+  const result = spawnSync(process.execPath, [COMPANION_SCRIPT, ...args], {
+    cwd,
+    env: combinedEnv,
+    encoding: "utf8"
+  });
 
-  try {
-    const stdout = execFileSync(process.execPath, [COMPANION_SCRIPT, ...args], {
-      cwd,
-      env: combinedEnv,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"]
-    });
+  const status = result.status ?? 1;
+  const stdout = result.stdout ?? "";
+  const stderr = result.stderr ?? "";
+  const error = result.error ?? null;
 
-    let recordedArgv = null;
-    let recordedCwd = null;
-    let recordedStdin = null;
-    if (fs.existsSync(recordArgvFile)) {
-      recordedArgv = JSON.parse(fs.readFileSync(recordArgvFile, "utf8"));
-    }
-    if (fs.existsSync(recordCwdFile)) {
-      recordedCwd = fs.readFileSync(recordCwdFile, "utf8").trim();
-    }
-    if (fs.existsSync(recordStdinFile)) {
-      recordedStdin = fs.readFileSync(recordStdinFile, "utf8");
-    }
+  const recordedArgv = fs.existsSync(recordArgvFile)
+    ? JSON.parse(fs.readFileSync(recordArgvFile, "utf8"))
+    : null;
+  const recordedCwd = fs.existsSync(recordCwdFile)
+    ? fs.readFileSync(recordCwdFile, "utf8").trim()
+    : null;
+  const recordedStdin = fs.existsSync(recordStdinFile)
+    ? fs.readFileSync(recordStdinFile, "utf8")
+    : null;
 
-    return { status: 0, stdout, stderr: "", recordedArgv, recordedCwd, recordedStdin, pluginDataDir };
-  } catch (err) {
-    let recordedArgv = null;
-    let recordedCwd = null;
-    let recordedStdin = null;
-    if (fs.existsSync(recordArgvFile)) {
-      recordedArgv = JSON.parse(fs.readFileSync(recordArgvFile, "utf8"));
-    }
-    if (fs.existsSync(recordCwdFile)) {
-      recordedCwd = fs.readFileSync(recordCwdFile, "utf8").trim();
-    }
-    if (fs.existsSync(recordStdinFile)) {
-      recordedStdin = fs.readFileSync(recordStdinFile, "utf8");
-    }
-
-    return {
-      status: err.status ?? 1,
-      stdout: err.stdout?.toString("utf8") ?? "",
-      stderr: err.stderr?.toString("utf8") ?? "",
-      error: err,
-      recordedArgv,
-      recordedCwd,
-      recordedStdin,
-      pluginDataDir
-    };
-  }
+  return { status, stdout, stderr, error, recordedArgv, recordedCwd, recordedStdin, pluginDataDir };
 }
 
 test("delegate uses smart permission by default, --input - and pipes prompt via stdin", () => {
@@ -107,6 +81,42 @@ test("delegate uses smart permission by default, --input - and pipes prompt via 
   assert.ok(res.stdout.includes("OK"));
   assert.ok(res.stdout.includes("mcode session: mvs_e833006d348440b38a85b16f960606ce"));
   assert.ok(res.stdout.includes("mcode --session mvs_e833006d348440b38a85b16f960606ce"));
+});
+
+test("delegate omits --model and --effort from mcode argv when not given", () => {
+  const res = runCompanion(["delegate", "task without model or effort"], {
+    env: { MCODE_FIXTURE: path.join(FIXTURES_DIR, "success.stream.jsonl") }
+  });
+
+  assert.equal(res.status, 0);
+  assert.ok(!res.recordedArgv.includes("--model"));
+  assert.ok(!res.recordedArgv.includes("--effort"));
+});
+
+test("delegate passes through --model and --effort when given", () => {
+  const res = runCompanion([
+    "delegate",
+    "--model", "custom/test-model",
+    "--effort", "high",
+    "task with model and effort"
+  ], {
+    env: { MCODE_FIXTURE: path.join(FIXTURES_DIR, "success.stream.jsonl") }
+  });
+
+  assert.equal(res.status, 0);
+  assert.equal(res.recordedArgv[res.recordedArgv.indexOf("--model") + 1], "custom/test-model");
+  assert.equal(res.recordedArgv[res.recordedArgv.indexOf("--effort") + 1], "high");
+  assert.equal(res.recordedStdin, "task with model and effort");
+});
+
+test("progress lines appear on stderr in text mode and not on stdout", () => {
+  const res = runCompanion(["delegate", "task checking progress streams"], {
+    env: { MCODE_FIXTURE: path.join(FIXTURES_DIR, "success.stream.jsonl") }
+  });
+
+  assert.equal(res.status, 0);
+  assert.ok(res.stderr.includes("[mcode] Starting turn..."));
+  assert.ok(!res.stdout.includes("[mcode]"));
 });
 
 test("delegate wraps prompt with read-only contract when --read-only is passed", () => {
@@ -127,6 +137,22 @@ test("delegate does not wrap prompt when --read-only is not passed", () => {
 
   assert.equal(res.status, 0);
   assert.equal(res.recordedStdin, "implement feature");
+});
+
+test("delegate rejects unsupported options with clear message", () => {
+  const res = runCompanion(["delegate", "--background", "task"]);
+
+  assert.notEqual(res.status, 0);
+  assert.ok(res.stderr.includes("Unsupported option: --background"));
+  assert.ok(res.stderr.includes("Supported options: --read-only, --full, --model <value>, --effort <value>, --json"));
+});
+
+test("delegate rejects --permission smart rather than appending to prompt", () => {
+  const res = runCompanion(["delegate", "--permission", "smart", "task"]);
+
+  assert.notEqual(res.status, 0);
+  assert.ok(res.stderr.includes("Unsupported option: --permission"));
+  assert.ok(!res.stdout.includes("task"));
 });
 
 test("delegate uses invocation cwd for --cwd and git toplevel for Job store", () => {
@@ -157,19 +183,31 @@ test("persists Job as failed with reason mcode-not-found when mcode is missing f
   assert.ok(parsed.error.message.includes("/mcode:setup"));
 });
 
-test("persists Job as failed with reason unsupported-output-version when schemaVersion is invalid", () => {
+test("persists Job as failed with reason unsupported-output-version and preserves session footer", () => {
   const tempFixture = path.join(os.tmpdir(), "unknown-schema-test.jsonl");
-  fs.writeFileSync(tempFixture, JSON.stringify({ schemaVersion: 99, type: "exec.started" }) + "\n");
+  const lines = [
+    JSON.stringify({ schemaVersion: 1, type: "exec.started", sessionId: "mvs_unsupported_ver_01" }),
+    JSON.stringify({ schemaVersion: 99, type: "exec.started", sessionId: "mvs_unsupported_ver_01" })
+  ].join("\n") + "\n";
+  fs.writeFileSync(tempFixture, lines);
 
-  const res = runCompanion(["delegate", "--json", "task with bad schema"], {
+  const resJson = runCompanion(["delegate", "--json", "task with bad schema"], {
     env: { MCODE_FIXTURE: tempFixture }
   });
-
-  assert.notEqual(res.status, 0);
-  const parsed = JSON.parse(res.stdout);
+  assert.notEqual(resJson.status, 0);
+  const parsed = JSON.parse(resJson.stdout);
   assert.equal(parsed.status, "failed");
   assert.equal(parsed.reason, "unsupported-output-version");
-  assert.ok(parsed.error.message.includes("Unsupported mcode output version: 99"));
+  assert.equal(parsed.mcodeSessionId, "mvs_unsupported_ver_01");
+
+  const resText = runCompanion(["delegate", "task with bad schema text"], {
+    env: { MCODE_FIXTURE: tempFixture }
+  });
+  assert.notEqual(resText.status, 0);
+  assert.ok(resText.stdout.includes("Unsupported mcode output version."));
+  assert.ok(resText.stdout.includes("mcode session: mvs_unsupported_ver_01"));
+  assert.ok(resText.stdout.includes("mcode --session mvs_unsupported_ver_01"));
+
   fs.unlinkSync(tempFixture);
 });
 
@@ -180,21 +218,6 @@ test("delegate uses full permission only when --full is requested", () => {
 
   assert.equal(res.status, 0);
   assert.equal(res.recordedArgv[res.recordedArgv.indexOf("--permission") + 1], "full");
-});
-
-test("delegate re-splits raw-arguments string", () => {
-  const res = runCompanion([
-    "delegate",
-    "--raw-arguments",
-    "--model custom/test-model --effort high 'fix formatting in files'"
-  ], {
-    env: { MCODE_FIXTURE: path.join(FIXTURES_DIR, "success.stream.jsonl") }
-  });
-
-  assert.equal(res.status, 0);
-  assert.equal(res.recordedArgv[res.recordedArgv.indexOf("--model") + 1], "custom/test-model");
-  assert.equal(res.recordedArgv[res.recordedArgv.indexOf("--effort") + 1], "high");
-  assert.equal(res.recordedStdin, "fix formatting in files");
 });
 
 test("delegate outputs structured JSON when --json is provided", () => {
@@ -250,7 +273,7 @@ test("handles permission-denied-handled run with status completed", () => {
   assert.ok(parsed.output.includes("Direct write outside working directory was blocked"));
 });
 
-test("maps INTERACTION_NOT_AVAILABLE to failed status with reason needs-interaction", () => {
+test("maps INTERACTION_NOT_AVAILABLE to failed status with reason needs-interaction and session footer", () => {
   const res = runCompanion(["delegate", "interaction required"], {
     env: { MCODE_FIXTURE: path.join(FIXTURES_DIR, "needs-interaction.stream.jsonl") }
   });
@@ -258,6 +281,7 @@ test("maps INTERACTION_NOT_AVAILABLE to failed status with reason needs-interact
   assert.notEqual(res.status, 0);
   assert.ok(res.stdout.includes("mcode requires interaction that is not available in headless mode"));
   assert.ok(res.stdout.includes("mcode --session mvs_interact_9876543210ab"));
+  assert.ok(res.stdout.includes("mcode session: mvs_interact_9876543210ab"));
 });
 
 test("maps timeout to failed status with reason timeout", () => {
@@ -271,7 +295,7 @@ test("maps timeout to failed status with reason timeout", () => {
   assert.equal(parsed.reason, "timeout");
 });
 
-test("maps limit_exceeded to failed status with reason limit_exceeded", () => {
+test("maps limit_exceeded to failed status with reason limit-exceeded", () => {
   const res = runCompanion(["delegate", "--json", "long loop"], {
     env: { MCODE_FIXTURE: path.join(FIXTURES_DIR, "limit-exceeded.stream.jsonl") }
   });
@@ -279,5 +303,5 @@ test("maps limit_exceeded to failed status with reason limit_exceeded", () => {
   assert.notEqual(res.status, 0);
   const parsed = JSON.parse(res.stdout);
   assert.equal(parsed.status, "failed");
-  assert.equal(parsed.reason, "limit_exceeded");
+  assert.equal(parsed.reason, "limit-exceeded");
 });
