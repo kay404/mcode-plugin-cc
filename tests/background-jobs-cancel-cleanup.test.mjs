@@ -453,7 +453,7 @@ test("cancel rejects unsupported options with clear message", () => {
   assert.ok(res.stderr.includes("Supported options: --json"));
 });
 
-test("SessionEnd hook terminates session's running Jobs and cleans up records while leaving other sessions untouched", (t) => {
+test("SessionEnd hook cancels session's running Jobs, keeps finished records, and leaves other sessions untouched", (t) => {
   const pluginDataDir = makeTempDir("mcode-test-session-end-");
 
   const sessionA = "session-alpha";
@@ -559,7 +559,18 @@ test("SessionEnd hook terminates session's running Jobs and cleans up records wh
   const statusResA = runCompanion(["status", "--json"], { pluginDataDir, sessionId: sessionA });
   assert.equal(statusResA.status, 0);
   const remainingA = JSON.parse(statusResA.stdout);
-  assert.equal(remainingA.length, 0, "Session A should have 0 remaining Jobs");
+  assert.equal(remainingA.length, 2, "Session A should keep both Job records");
+  const cancelledA = remainingA.find((j) => j.id === jobA.id);
+  assert.equal(cancelledA.status, "cancelled", "Session A running Job should be marked cancelled");
+  assert.equal(remainingA.filter((j) => j.status === "completed").length, 1, "Session A finished Job should be kept");
+
+  const resultA = runCompanion(["result", jobA.id], { pluginDataDir, sessionId: sessionA });
+  assert.equal(resultA.status, 0);
+  assert.match(resultA.stdout, /mcode delegation was cancelled\./);
+
+  const candidateA = runCompanion(["resume-candidate", "--json"], { pluginDataDir, sessionId: sessionA });
+  assert.equal(candidateA.status, 0);
+  assert.equal(JSON.parse(candidateA.stdout).hasCandidate, true, "Finished delegation should still be resumable after SessionEnd");
 
   const statusResB = runCompanion(["status", "--json"], { pluginDataDir, sessionId: sessionB });
   assert.equal(statusResB.status, 0);
@@ -568,8 +579,8 @@ test("SessionEnd hook terminates session's running Jobs and cleans up records wh
 
   const stateDirs = fs.readdirSync(path.join(pluginDataDir, "state"));
   const jobsDir = path.join(pluginDataDir, "state", stateDirs[0], "jobs");
-  assert.equal(fs.existsSync(path.join(jobsDir, `${jobA.id}.json`)), false);
-  assert.equal(fs.existsSync(path.join(jobsDir, `${jobA.id}.log`)), false);
+  assert.equal(fs.existsSync(path.join(jobsDir, `${jobA.id}.json`)), true);
+  assert.equal(fs.existsSync(path.join(jobsDir, `${jobA.id}.log`)), true);
 
   assert.equal(fs.existsSync(path.join(jobsDir, `${jobB.id}.json`)), true);
   assert.equal(fs.existsSync(path.join(jobsDir, `${jobB.id}.log`)), true);

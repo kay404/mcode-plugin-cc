@@ -186,52 +186,6 @@ export function getJobProgressPreview(cwd, jobId) {
   return "-";
 }
 
-export function cleanupSessionJobs(cwd, sessionId, options = {}) {
-  if (!sessionId) return;
-
-  const storeOpts = { pluginDataDir: options.pluginDataDir };
-
-  const state = loadState(cwd, storeOpts);
-  const jobsToKeep = [];
-  const jobsToRemove = [];
-
-  for (const item of state.jobs) {
-    if (item.sessionId === sessionId) {
-      jobsToRemove.push(item);
-    } else {
-      jobsToKeep.push(item);
-    }
-  }
-
-  for (const item of jobsToRemove) {
-    const job = loadJob(cwd, item.id, storeOpts);
-    if (job && !FINISHED_STATUSES.has(job.status)) {
-      if (job.processId) {
-        terminateJobProcess(job.processId);
-      }
-    }
-    const jobFile = resolveJobFile(cwd, item.id, storeOpts);
-    const logFile = resolveJobLogFile(cwd, item.id, storeOpts);
-    if (fs.existsSync(jobFile)) {
-      try {
-        fs.unlinkSync(jobFile);
-      } catch {}
-    }
-    if (fs.existsSync(logFile)) {
-      try {
-        fs.unlinkSync(logFile);
-      } catch {}
-    }
-  }
-
-  state.jobs = jobsToKeep;
-  const stateDir = resolveStateDir(cwd, storeOpts);
-  const stateFile = path.join(stateDir, "state.json");
-  if (fs.existsSync(stateDir)) {
-    fs.writeFileSync(stateFile, JSON.stringify(state, null, 2), "utf8");
-  }
-}
-
 export function filterJobsBySession(jobs, options = {}) {
   if (options.all || options.sessionId === undefined) {
     return jobs;
