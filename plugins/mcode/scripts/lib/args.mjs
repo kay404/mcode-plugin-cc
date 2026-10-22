@@ -46,12 +46,34 @@ export const REVIEW_OPTION_CONFIG = {
   supportedHint: "--wait, --background, --json"
 };
 
+export const ADVERSARIAL_REVIEW_OPTION_CONFIG = {
+  valueOptions: ["base", "plan"],
+  booleanOptions: ["wait", "background", "json"],
+  stopAtFirstPositional: true,
+  supportedHint: "--base <ref>, --plan <path>, --wait, --background, --json"
+};
+
+export function splitSubcommandArgs(rawArgs) {
+  const result = [];
+  for (const arg of rawArgs) {
+    result.push(...arg.trim().split(/\s+/).filter(Boolean));
+  }
+  return result;
+}
+
+export function assertWaitBackgroundExclusive(options) {
+  if (options.wait && options.background) {
+    throw new Error("Cannot combine --wait and --background (they are mutually exclusive).");
+  }
+}
+
 const SUPPORTED_OPTIONS_HINT = "--read-only, --full, --model <value>, --effort <value>, --json";
 
 export function parseArgs(argv, config = {}) {
   const valueOptions = new Set(config.valueOptions ?? []);
   const booleanOptions = new Set(config.booleanOptions ?? []);
   const supportedHint = config.supportedHint ?? SUPPORTED_OPTIONS_HINT;
+  const stopAtFirstPositional = Boolean(config.stopAtFirstPositional);
   const options = {};
   const positionals = [];
   let passthrough = false;
@@ -71,6 +93,9 @@ export function parseArgs(argv, config = {}) {
 
     if (!token.startsWith("-") || token === "-") {
       positionals.push(token);
+      if (stopAtFirstPositional) {
+        passthrough = true;
+      }
       continue;
     }
 

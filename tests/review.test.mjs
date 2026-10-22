@@ -370,3 +370,27 @@ test("finished review Job is never a resume-candidate and running review Job doe
     runCompanion(["cancel", match[1]], { cwd: repo, pluginDataDir: reviewRes.pluginDataDir });
   }
 });
+
+test('review command invocation with background flag and empty arguments: ["review", "--background", ""]', () => {
+  const repo = initTestRepo();
+  fs.writeFileSync(path.join(repo, "math.js"), "function add(a, b) { return a - b; }\n", "utf8");
+
+  const fixture = path.join(__dirname, "fixtures/review-needs-changes.stream.jsonl");
+  const res = runCompanion(["review", "--background", ""], {
+    cwd: repo,
+    env: { MCODE_FIXTURE: fixture }
+  });
+
+  assert.equal(res.status, 0);
+  assert.match(res.stdout, /Job (review-[a-z0-9-]+) started in the background\./);
+  const match = res.stdout.match(/Job (review-[a-z0-9-]+) started in the background\./);
+  const jobId = match[1];
+
+  const waitRes = runCompanion(["status", jobId, "--wait", "--timeout-ms", "5000"], {
+    cwd: repo,
+    pluginDataDir: res.pluginDataDir
+  });
+  assert.equal(waitRes.status, 0);
+  assert.match(waitRes.stdout, /State:\s+completed/);
+  assert.match(waitRes.stdout, /Kind:\s+review/);
+});

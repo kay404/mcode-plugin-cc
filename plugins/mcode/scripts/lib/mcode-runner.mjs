@@ -17,7 +17,8 @@ export function buildMcodeArgv(options) {
     model,
     effort,
     session,
-    command
+    command,
+    outputSchema
   } = options;
 
   if (permission === "off") {
@@ -44,10 +45,14 @@ export function buildMcodeArgv(options) {
     "--permission",
     permission,
     "--output-format",
-    "stream-json",
-    "--input",
-    "-"
+    "stream-json"
   ];
+
+  if (outputSchema) {
+    argv.push("--output-schema", outputSchema);
+  }
+
+  argv.push("--input", "-");
 
   if (model) {
     argv.push("--model", model);
@@ -143,6 +148,9 @@ export function mapMcodeResultToOutcome(execResult, stderr = "") {
   }
   if (status === "limit_exceeded") {
     return { ...base, reason: "limit-exceeded", error: error ?? { message: FAILURE_REASONS["limit-exceeded"].defaultMessage } };
+  }
+  if (error?.code === "STRUCTURED_OUTPUT_INVALID") {
+    return { ...base, reason: "schema-invalid", error };
   }
   if (isNeedsInteraction(error, stderr)) {
     return { ...base, reason: "needs-interaction", error: error ?? { message: FAILURE_REASONS["needs-interaction"].defaultMessage } };
