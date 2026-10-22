@@ -1,0 +1,21 @@
+{
+  "name": "mcode-plugin-cc",
+  "owner": {
+    "name": "kay404"
+  },
+  "metadata": {
+    "description": "Claude Code marketplace for mcode integration.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "mcode",
+      "description": "Claude Code plugin that lets Claude hand work to MiniMax's mcode CLI agent.",
+      "version": "0.1.0",
+      "author": {
+        "name": "kay404"
+      },
+      "source": "./plugins/mcode"
+    }
+  ]
+}
