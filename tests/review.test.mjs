@@ -38,6 +38,14 @@ test("review rejects unexpected positional arguments", () => {
   assert.equal(res.recordedArgv, null, "mcode must not be called on unexpected arguments");
 });
 
+test("review rejects --wait combined with --background", () => {
+  const repo = initTestRepo();
+  const res = runCompanion(["review", "--wait", "--background"], { cwd: repo });
+  assert.equal(res.status, 1);
+  assert.match(res.stderr, /Cannot combine --wait and --background/);
+  assert.equal(res.recordedArgv, null, "mcode must not be called when incompatible options are passed");
+});
+
 test("review outside git repository exits with error and does not call mcode", () => {
   const nonGitDir = makeTempDir("mcode-non-git-");
   const res = runCompanion(["review"], { cwd: nonGitDir });
@@ -123,6 +131,7 @@ test("review renders real findings verbatim and appends session footer", () => {
   });
 
   assert.equal(res.status, 0);
+  assert.match(res.stdout, /^Verdict: needs_changes/m);
   assert.match(res.stdout, /add 函数返回减法结果/);
   assert.match(res.stdout, /math\.js:3/);
   assert.match(res.stdout, /---\nmcode session: mvs_599cb59c885d43558d9fb53967496207/);
@@ -140,8 +149,56 @@ test("review clean pass renders summary and session footer", () => {
   });
 
   assert.equal(res.status, 0);
+  assert.match(res.stdout, /^Verdict: pass/m);
   assert.match(res.stdout, /本次未发现可报告的问题/);
   assert.match(res.stdout, /---\nmcode session: mvs_9e4dbc34c4284eeca730d9fa521028a0/);
+});
+
+test("review falls back to formatted JSON when output object has no verdict, summary, or findings", () => {
+  const repo = initTestRepo();
+  fs.writeFileSync(path.join(repo, "math.js"), "function add(a, b) { return a - b; }\n", "utf8");
+
+  const customFixtureDir = makeTempDir("mcode-custom-output-");
+  const streamFile = path.join(customFixtureDir, "custom.stream.jsonl");
+  const lines = [
+    JSON.stringify({ schemaVersion: 1, sequence: 1, type: "exec.started" }),
+    JSON.stringify({
+      schemaVersion: 1,
+      sequence: 2,
+      type: "exec.completed",
+      result: {
+        schemaVersion: 1,
+        type: "exec.result",
+        status: "succeeded",
+        output: { customMetric: 42, details: "arbitrary object" }
+      }
+    })
+  ];
+  fs.writeFileSync(streamFile, lines.join("\n") + "\n", "utf8");
+
+  const res = runCompanion(["review"], {
+    cwd: repo,
+    env: { MCODE_FIXTURE: streamFile }
+  });
+
+  assert.equal(res.status, 0);
+  assert.match(res.stdout, /"customMetric": 42/);
+});
+
+test("review --wait runs in foreground and prints result", () => {
+  const repo = initTestRepo();
+  fs.writeFileSync(path.join(repo, "math.js"), "function add(a, b) { return a - b; }\n", "utf8");
+
+  const fixture = path.join(__dirname, "fixtures/review-needs-changes.stream.jsonl");
+  const res = runCompanion(["review", "--wait"], {
+    cwd: repo,
+    env: { MCODE_FIXTURE: fixture }
+  });
+
+  assert.equal(res.status, 0);
+  assert.match(res.stdout, /^Verdict: needs_changes/m);
+  assert.match(res.stdout, /add 函数返回减法结果/);
+  assert.match(res.stdout, /---\nmcode session: mvs_599cb59c885d43558d9fb53967496207/);
 });
 
 test("review --background writes queued Job, prints guidance, and worker executes in background", () => {
@@ -176,6 +233,7 @@ test("review --background writes queued Job, prints guidance, and worker execute
   });
 
   assert.equal(resultRes.status, 0);
+  assert.match(resultRes.stdout, /^Verdict: needs_changes/m);
   assert.match(resultRes.stdout, /add 函数返回减法结果/);
   assert.match(resultRes.stdout, /---\nmcode session: mvs_599cb59c885d43558d9fb53967496207/);
 });
@@ -236,51 +294,79 @@ test("read-only guard detects modifications during review, renders violation fir
   assert.equal(content, "mutated during review\n");
 });
 
-test("review maps REVIEW_RESULT_INVALID error code to review-result-invalid reason", () => {
+test("review Job appears in status and result with no id returns it", () => {
   const repo = initTestRepo();
   fs.writeFileSync(path.join(repo, "math.js"), "function add(a, b) { return a - b; }\n", "utf8");
 
-  // Create temporary fixture with REVIEW_RESULT_INVALID
-  const failFixture = makeTempDir("mcode-fail-fixture-");
-  const failStreamFile = path.join(failFixture, "review-invalid.stream.jsonl");
-  const lines = [
-    JSON.stringify({ schemaVersion: 1, sequence: 1, type: "exec.started" }),
-    JSON.stringify({
-      schemaVersion: 1,
-      sequence: 2,
-      type: "exec.completed",
-      result: {
-        schemaVersion: 1,
-        type: "exec.result",
-        status: "failed",
-        sessionId: "mvs_fail_123",
-        error: {
-          code: "REVIEW_RESULT_INVALID",
-          message: "Output JSON does not match review schema"
-        }
-      }
-    })
-  ];
-  fs.writeFileSync(failStreamFile, lines.join("\n") + "\n", "utf8");
-
-  const res = runCompanion(["review"], {
+  const fixture = path.join(__dirname, "fixtures/review-needs-changes.stream.jsonl");
+  const runRes = runCompanion(["review"], {
     cwd: repo,
-    env: { MCODE_FIXTURE: failStreamFile }
+    env: { MCODE_FIXTURE: fixture }
   });
+  assert.equal(runRes.status, 0);
 
-  assert.equal(res.status, 1);
-  assert.match(res.stdout, /mcode review produced an invalid result\./);
-  assert.match(res.stdout, /Output JSON does not match review schema/);
-  assert.match(res.stdout, /---\nmcode session: mvs_fail_123/);
-
-  // Check JSON representation
-  const jsonRes = runCompanion(["review", "--json"], {
+  const statusRes = runCompanion(["status"], {
     cwd: repo,
-    env: { MCODE_FIXTURE: failStreamFile }
+    pluginDataDir: runRes.pluginDataDir
   });
-  const data = JSON.parse(jsonRes.stdout);
-  assert.equal(data.status, "failed");
-  assert.equal(data.reason, "review-result-invalid");
+  assert.equal(statusRes.status, 0);
+  assert.match(statusRes.stdout, /review/);
+  assert.match(statusRes.stdout, /completed/);
+
+  const resultRes = runCompanion(["result"], {
+    cwd: repo,
+    pluginDataDir: runRes.pluginDataDir
+  });
+  assert.equal(resultRes.status, 0);
+  assert.match(resultRes.stdout, /^Verdict: needs_changes/m);
+  assert.match(resultRes.stdout, /add 函数返回减法结果/);
 });
 
+test("finished review Job is never a resume-candidate and running review Job does not block delegate --resume", () => {
+  const repo = initTestRepo();
+  fs.writeFileSync(path.join(repo, "math.js"), "function add(a, b) { return a - b; }\n", "utf8");
 
+  const fixture = path.join(__dirname, "fixtures/review-needs-changes.stream.jsonl");
+  const reviewRes = runCompanion(["review"], {
+    cwd: repo,
+    env: { MCODE_FIXTURE: fixture }
+  });
+  assert.equal(reviewRes.status, 0);
+
+  // Finished review job must not be a resume candidate
+  const candidateRes = runCompanion(["resume-candidate", "--json"], {
+    cwd: repo,
+    pluginDataDir: reviewRes.pluginDataDir
+  });
+  assert.equal(candidateRes.status, 0);
+  const candidateData = JSON.parse(candidateRes.stdout);
+  assert.equal(candidateData.hasCandidate, false);
+
+  // Create a previous finished delegate Job that has an mcode session id
+  const delegate1 = runCompanion(["delegate", "first task"], {
+    cwd: repo,
+    pluginDataDir: reviewRes.pluginDataDir
+  });
+  assert.equal(delegate1.status, 0);
+
+  // Start a review Job running in the background
+  const bgReview = runCompanion(["review", "--background"], {
+    cwd: repo,
+    pluginDataDir: reviewRes.pluginDataDir,
+    env: { MCODE_SLEEP_MS: "3000" }
+  });
+  assert.equal(bgReview.status, 0);
+
+  // delegate --resume must NOT be blocked by running/queued review Job
+  const resumeRes = runCompanion(["delegate", "--resume", "followup task"], {
+    cwd: repo,
+    pluginDataDir: reviewRes.pluginDataDir
+  });
+  assert.equal(resumeRes.status, 0);
+
+  // Clean up running background review job
+  const match = bgReview.stdout.match(/Job (review-[a-z0-9-]+) started in the background\./);
+  if (match) {
+    runCompanion(["cancel", match[1]], { cwd: repo, pluginDataDir: reviewRes.pluginDataDir });
+  }
+});

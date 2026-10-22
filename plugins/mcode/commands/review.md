@@ -2,7 +2,7 @@
 description: Run mcode's built-in review on uncommitted working tree changes
 argument-hint: "[--wait] [--background]"
 disable-model-invocation: true
-allowed-tools: Bash(node:*,git:*), AskUserQuestion
+allowed-tools: Bash(node:*), Bash(git:*), AskUserQuestion
 ---
 
 Run mcode's built-in review on uncommitted changes in the working tree.
@@ -15,6 +15,8 @@ Operating rules:
   - Check the size of the uncommitted change set:
     - Run `git diff --shortstat HEAD` to count changed lines (insertions and deletions).
     - Run `git status --porcelain` to count untracked files (lines starting with `??`).
+  - If there are no uncommitted changes (empty shortstat and zero untracked files):
+    - Run the companion review command directly without asking wait/background — it will print "No uncommitted changes to review."
   - Size threshold:
     - Large change (>200 changed lines or >10 untracked files):
       - Ask once using `AskUserQuestion`:
@@ -31,6 +33,6 @@ Operating rules:
 - If `--wait` was passed, run in foreground without `--background`.
 - If `--background` was passed, run with `--background`.
 - Run the companion review command:
-  `node "${CLAUDE_PLUGIN_ROOT}/scripts/mcode-companion.mjs" review $ARGUMENTS`
+  `node "${CLAUDE_PLUGIN_ROOT}/scripts/mcode-companion.mjs" review "$ARGUMENTS"`
 - Present the companion output above verbatim and in full, without summarising or adding commentary.
 - After presenting review findings, STOP and ask the user which findings to fix; never auto-fix without explicit user decision.

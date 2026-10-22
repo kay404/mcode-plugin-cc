@@ -65,15 +65,92 @@ function splitSubcommandArgs(rawArgs) {
   return rawArgs;
 }
 
-async function executeDelegation(job, workspaceRoot, invocationCwd, onProgress = () => {}) {
+function buildJobRecord({
+  id,
+  kind,
+  title,
+  prompt = null,
+  command,
+  cwd,
+  workspace,
+  sessionId = null,
+  isBackground = false,
+  readOnly = false,
+  permission = "smart",
+  model = null,
+  effort = null,
+  mcodeSessionId = null
+}) {
+  const now = new Date().toISOString();
+  return {
+    id,
+    kind,
+    title,
+    prompt,
+    command,
+    cwd,
+    workspace,
+    sessionId,
+    processId: isBackground ? null : process.pid,
+    readOnly,
+    permission,
+    model,
+    effort,
+    mcodeSessionId,
+    status: isBackground ? "queued" : "running",
+    reason: null,
+    output: null,
+    renderedOutput: null,
+    error: null,
+    usage: null,
+    readOnlyGuard: null,
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
+function launchBackgroundWorker(job, workspaceRoot, logMessage, isJson) {
+  appendJobLog(workspaceRoot, job.id, logMessage);
+
+  const companionScript = path.resolve(process.argv[1]);
+  const worker = spawn(process.execPath, [
+    companionScript,
+    "delegate-worker",
+    "--job-id",
+    job.id
+  ], {
+    cwd: job.cwd || job.workspace,
+    detached: true,
+    stdio: "ignore",
+    env: process.env
+  });
+  worker.unref();
+
+  if (isJson) {
+    console.log(JSON.stringify(buildJobJsonPayload(job), null, 2));
+  } else {
+    process.stdout.write([
+      `Job ${job.id} started in the background.`,
+      "",
+      `To check progress:  /mcode:status ${job.id}`,
+      `To read results:    /mcode:result ${job.id}`,
+      `To cancel:          /mcode:cancel ${job.id}`,
+      ""
+    ].join("\n"));
+  }
+}
+
+async function executeJob(job, workspaceRoot, onProgress = () => {}) {
   const readOnly = job.readOnly;
   const snapshotBefore = readOnly ? captureWorkspaceSnapshot(workspaceRoot) : null;
-  const mcodePrompt = readOnly ? wrapReadOnlyPrompt(job.prompt) : job.prompt;
+  const mcodePrompt = job.prompt && readOnly ? wrapReadOnlyPrompt(job.prompt) : job.prompt;
+  const execCwd = job.cwd || workspaceRoot;
 
   let outcome;
   try {
     outcome = await runMcode({
-      cwd: invocationCwd,
+      command: job.command,
+      cwd: execCwd,
       permission: job.permission,
       model: job.model,
       effort: job.effort,
@@ -107,60 +184,6 @@ async function executeDelegation(job, workspaceRoot, invocationCwd, onProgress =
         `Read-only violation detected: ${job.readOnlyGuard.changedPaths.join(", ")}`
       );
     }
-  }
-
-  job.status = outcome.status;
-  job.reason = outcome.reason;
-  job.output = outcome.output;
-  job.error = outcome.error;
-  job.usage = outcome.usage || null;
-  if (outcome.mcodeSessionId) {
-    job.mcodeSessionId = outcome.mcodeSessionId;
-  }
-  job.stderr = outcome.stderr;
-  job.renderedOutput = renderDelegationResult(job);
-
-  saveJob(workspaceRoot, job);
-  appendJobLog(workspaceRoot, job.id, `Completed with status ${job.status}${job.reason ? ` (${job.reason})` : ""}`);
-
-  return outcome;
-}
-
-async function executeReview(job, workspaceRoot, invocationCwd, onProgress = () => {}) {
-  const snapshotBefore = captureWorkspaceSnapshot(workspaceRoot);
-
-  let outcome;
-  try {
-    outcome = await runMcode({
-      command: "review",
-      cwd: workspaceRoot,
-      permission: job.permission,
-      onProgress
-    });
-  } catch (err) {
-    outcome = {
-      status: "failed",
-      reason: err.reason || "error",
-      output: null,
-      error: { message: err.message },
-      mcodeSessionId: err.sessionId || null,
-      exitCode: 1,
-      stderr: err.message
-    };
-  }
-
-  const latestJob = loadJob(workspaceRoot, job.id) || job;
-  if (latestJob.status === "cancelled") {
-    return outcome;
-  }
-
-  job.readOnlyGuard = evaluateWorkspaceGuard(snapshotBefore, workspaceRoot);
-  if (job.readOnlyGuard.changedPaths.length > 0 || job.readOnlyGuard.headMoved || job.readOnlyGuard.stashChanged) {
-    appendJobLog(
-      workspaceRoot,
-      job.id,
-      `Read-only violation detected: ${job.readOnlyGuard.changedPaths.join(", ")}`
-    );
   }
 
   job.status = outcome.status;
@@ -227,11 +250,9 @@ async function handleDelegate(rawTokens) {
   }
 
   const jobId = generateJobId("delegate");
-  const createdAt = new Date().toISOString();
-
   const isBackground = Boolean(options.background);
 
-  const job = {
+  const job = buildJobRecord({
     id: jobId,
     kind: "delegate",
     title: prompt,
@@ -239,60 +260,24 @@ async function handleDelegate(rawTokens) {
     cwd: invocationCwd,
     workspace: workspaceRoot,
     sessionId: currentSessionId,
-    processId: isBackground ? null : process.pid,
+    isBackground,
     readOnly,
     permission,
     model: options.model || null,
     effort: options.effort || null,
-    mcodeSessionId: targetMcodeSessionId || null,
-    status: isBackground ? "queued" : "running",
-    reason: null,
-    output: null,
-    renderedOutput: null,
-    error: null,
-    usage: null,
-    readOnlyGuard: null,
-    createdAt,
-    updatedAt: createdAt
-  };
+    mcodeSessionId: targetMcodeSessionId || null
+  });
 
   saveJob(workspaceRoot, job);
 
   if (isBackground) {
-    appendJobLog(workspaceRoot, jobId, `Queued delegation: "${prompt.slice(0, 80)}"`);
-
-    const companionScript = path.resolve(process.argv[1]);
-    const worker = spawn(process.execPath, [
-      companionScript,
-      "delegate-worker",
-      "--job-id",
-      jobId
-    ], {
-      cwd: invocationCwd,
-      detached: true,
-      stdio: "ignore",
-      env: process.env
-    });
-    worker.unref();
-
-    if (options.json) {
-      console.log(JSON.stringify(buildJobJsonPayload(job), null, 2));
-    } else {
-      process.stdout.write([
-        `Job ${jobId} started in the background.`,
-        "",
-        `To check progress:  /mcode:status ${jobId}`,
-        `To read results:    /mcode:result ${jobId}`,
-        `To cancel:          /mcode:cancel ${jobId}`,
-        ""
-      ].join("\n"));
-    }
+    launchBackgroundWorker(job, workspaceRoot, `Queued delegation: "${prompt.slice(0, 80)}"`, options.json);
     return;
   }
 
   appendJobLog(workspaceRoot, jobId, `Starting delegation: "${prompt.slice(0, 80)}"`);
 
-  const outcome = await executeDelegation(job, workspaceRoot, invocationCwd, (line) => {
+  const outcome = await executeJob(job, workspaceRoot, (line) => {
     appendJobLog(workspaceRoot, jobId, line);
     if (!options.json) {
       process.stderr.write(`[mcode] ${line}\n`);
@@ -337,16 +322,9 @@ async function handleDelegateWorker(rawTokens) {
   saveJob(workspaceRoot, job);
   appendJobLog(workspaceRoot, jobId, `Worker started with PID ${process.pid}`);
 
-  const invocationCwd = job.cwd || job.workspace;
-  if (job.kind === "review") {
-    await executeReview(job, workspaceRoot, invocationCwd, (line) => {
-      appendJobLog(workspaceRoot, jobId, line);
-    });
-  } else {
-    await executeDelegation(job, workspaceRoot, invocationCwd, (line) => {
-      appendJobLog(workspaceRoot, jobId, line);
-    });
-  }
+  await executeJob(job, workspaceRoot, (line) => {
+    appendJobLog(workspaceRoot, jobId, line);
+  });
 }
 
 async function handleResumeCandidate(rawTokens) {
@@ -643,6 +621,11 @@ async function handleReview(rawTokens) {
     process.exit(1);
   }
 
+  if (parsed.options.wait && parsed.options.background) {
+    console.error("Error: Cannot combine --wait and --background (they are mutually exclusive).");
+    process.exit(1);
+  }
+
   const invocationCwd = process.cwd();
   if (!isGitWorkspace(invocationCwd)) {
     console.error("Error: Not a git repository.");
@@ -676,71 +659,31 @@ async function handleReview(rawTokens) {
 
   const isBackground = Boolean(parsed.options.background);
   const jobId = generateJobId("review");
-  const createdAt = new Date().toISOString();
   const currentSessionId = process.env[SESSION_ID_ENV] || null;
 
-  const job = {
+  const job = buildJobRecord({
     id: jobId,
     kind: "review",
     title: "Review uncommitted changes",
-    prompt: null,
-    cwd: invocationCwd,
+    command: "review",
+    cwd: workspaceRoot,
     workspace: workspaceRoot,
     sessionId: currentSessionId,
-    processId: isBackground ? null : process.pid,
+    isBackground,
     readOnly: true,
-    permission: "smart",
-    model: null,
-    effort: null,
-    mcodeSessionId: null,
-    status: isBackground ? "queued" : "running",
-    reason: null,
-    output: null,
-    renderedOutput: null,
-    error: null,
-    usage: null,
-    readOnlyGuard: null,
-    createdAt,
-    updatedAt: createdAt
-  };
+    permission: "smart"
+  });
 
   saveJob(workspaceRoot, job);
 
   if (isBackground) {
-    appendJobLog(workspaceRoot, jobId, "Queued review of uncommitted changes");
-
-    const companionScript = path.resolve(process.argv[1]);
-    const worker = spawn(process.execPath, [
-      companionScript,
-      "delegate-worker",
-      "--job-id",
-      jobId
-    ], {
-      cwd: invocationCwd,
-      detached: true,
-      stdio: "ignore",
-      env: process.env
-    });
-    worker.unref();
-
-    if (parsed.options.json) {
-      console.log(JSON.stringify(buildJobJsonPayload(job), null, 2));
-    } else {
-      process.stdout.write([
-        `Job ${jobId} started in the background.`,
-        "",
-        `To check progress:  /mcode:status ${jobId}`,
-        `To read results:    /mcode:result ${jobId}`,
-        `To cancel:          /mcode:cancel ${jobId}`,
-        ""
-      ].join("\n"));
-    }
+    launchBackgroundWorker(job, workspaceRoot, "Queued review of uncommitted changes", parsed.options.json);
     return;
   }
 
   appendJobLog(workspaceRoot, jobId, "Starting review of uncommitted changes");
 
-  const outcome = await executeReview(job, workspaceRoot, invocationCwd, (line) => {
+  const outcome = await executeJob(job, workspaceRoot, (line) => {
     appendJobLog(workspaceRoot, jobId, line);
     if (!parsed.options.json) {
       process.stderr.write(`[mcode] ${line}\n`);

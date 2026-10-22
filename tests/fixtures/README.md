@@ -14,8 +14,8 @@ This directory contains streaming JSONL fixtures used by the test harness to sim
 - **`provider-list-key-only.json`**: Fake fixture containing only a verified key provider.
 - **`provider-list-oauth-only.json`**: Fake fixture containing only an unverified OAuth provider.
 - **`provider-list-none-active.json`**: Fake fixture containing no active providers.
-- **`review-needs-changes.stream.jsonl`**: Real (recorded with `mcode` 0.6.12 running `mcode exec review --cwd <git toplevel> --permission smart --output-format stream-json` on uncommitted changes with a planted bug; scrubbed).
-- **`review-pass.stream.jsonl`**: Real (recorded with `mcode` 0.6.12 running `mcode exec review --cwd <git toplevel> --permission smart --output-format stream-json` on clean uncommitted changes; scrubbed).
+- **`review-needs-changes.stream.jsonl`**: Real (recorded with `mcode` 0.6.12 running `mcode exec review --cwd <git toplevel> --permission smart --output-format stream-json` on uncommitted changes with a planted bug; scrubbed and trimmed of `item.updated` streaming deltas).
+- **`review-pass.stream.jsonl`**: Real (recorded with `mcode` 0.6.12 running `mcode exec review --cwd <git toplevel> --permission smart --output-format stream-json` on clean uncommitted changes; scrubbed and trimmed of `item.updated` streaming deltas).
 
 ## Smart-Permission Behaviour Finding
 
@@ -31,9 +31,9 @@ In this scenario:
 
 A real run terminated by SIGTERM mid-run emits no `exec.completed` event on stdout, writes `mcode exec failed: Execution was cancelled.` to stderr, and exits with code 130. The plugin runner maps mid-run termination to Job status `cancelled`.
 
-## Review Inherently Read-Only Finding
+## Review Permission & Read-Only Behaviour Finding
 
-When running `mcode exec review --cwd <git toplevel> --permission smart --output-format stream-json`, `mcode` inspects the working tree's uncommitted changes without modifying any files:
-1. Even when provided with `--permission smart` and uncommitted changes containing a planted defect, `mcode exec review` never edits or mutates files in the working tree (`git diff` is byte-identical before and after the review).
-2. During review, probing commands attempting execution (such as `node -e ...`) fail under headless smart mode with `HOST_CAPABILITY_UNAVAILABLE: this Runtime host cannot prompt for permission.`, which `mcode` handles gracefully without side effects.
-3. Therefore, `mcode exec review` is inherently read-only: it only performs read/inspection operations on the working tree.
+Probing `mcode exec review --cwd <git toplevel> --output-format stream-json` with `--permission smart` versus `--permission full` on a repository with uncommitted changes containing a planted defect showed:
+1. `mcode exec review` accepts `--permission full` without error. Whether it changes which tools run during a review was not observed.
+2. Under `--permission smart`, tool actions that would prompt for approval in interactive mode (such as executing arbitrary node scripts or out-of-bounds writes) fail with `HOST_CAPABILITY_UNAVAILABLE: this Runtime host cannot prompt for permission.`, which mcode recovers from.
+3. Under both `--permission smart` and `--permission full`, `mcode exec review` did not edit or revert the planted bug in the working tree (`git diff` remained byte-identical before and after). The built-in review intent limits itself to inspecting files and returning findings rather than modifying files.

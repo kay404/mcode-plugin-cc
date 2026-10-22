@@ -1,7 +1,7 @@
-import { FAILURE_REASONS } from "./failure-reasons.mjs";
+import { FAILURE_REASONS, JOB_KIND_NOUNS, getFailureHeading } from "./failure-reasons.mjs";
 import { GUARD_REASONS } from "./workspace-guard.mjs";
 
-function renderReadOnlyPrefix(guard, jobKind) {
+function renderReadOnlyPrefix(guard, noun = "delegation") {
   if (!guard) return "";
 
   if (!guard.checked) {
@@ -22,25 +22,36 @@ function renderReadOnlyPrefix(guard, jobKind) {
 
   if (items.length > 0) {
     const list = items.map((item) => `  - ${item}`).join("\n");
-    const noun = jobKind === "review" ? "review" : "delegation";
     return `Read-only violation: files were modified during a read-only ${noun}:\n${list}\n\n`;
   }
 
   return "";
 }
 
-export function renderReviewOutput(output) {
+function renderOutput(output) {
   if (typeof output === "string") {
     return output.trim();
   }
   if (!output || typeof output !== "object") {
     return "";
   }
+
+  const hasVerdict = Boolean(output.verdict);
+  const hasSummary = Boolean(output.summary);
+  const hasFindings = Array.isArray(output.findings) && output.findings.length > 0;
+
+  if (!hasVerdict && !hasSummary && !hasFindings) {
+    return JSON.stringify(output, null, 2);
+  }
+
   const lines = [];
-  if (output.summary) {
+  if (hasVerdict) {
+    lines.push(`Verdict: ${output.verdict}`);
+  }
+  if (hasSummary) {
     lines.push(output.summary.trim());
   }
-  if (Array.isArray(output.findings) && output.findings.length > 0) {
+  if (hasFindings) {
     for (const f of output.findings) {
       const parts = [];
       const priority = f.priority ? `[${f.priority}] ` : "";
@@ -78,28 +89,23 @@ export function renderReviewOutput(output) {
 }
 
 export function renderDelegationResult(job) {
-  const prefix = renderReadOnlyPrefix(job.readOnlyGuard, job.kind);
+  const noun = JOB_KIND_NOUNS[job.kind] ?? "delegation";
+  const prefix = renderReadOnlyPrefix(job.readOnlyGuard, noun);
   const sessionId = job.mcodeSessionId;
   const sessionFooter = sessionId
     ? `\n\n---\nmcode session: ${sessionId}\nTo open this session in the mcode TUI: mcode --session ${sessionId}`
     : "";
 
   if (job.status === "completed") {
-    const rawOutput = job.kind === "review"
-      ? renderReviewOutput(job.output)
-      : (typeof job.output === "string" ? job.output.trim() : renderReviewOutput(job.output));
+    const rawOutput = renderOutput(job.output);
     return `${prefix}${rawOutput}${sessionFooter}\n`;
   }
 
   if (job.status === "cancelled") {
-    const noun = job.kind === "review" ? "mcode review" : "mcode delegation";
-    return `${prefix}${noun} was cancelled.${sessionFooter}\n`;
+    return `${prefix}mcode ${noun} was cancelled.${sessionFooter}\n`;
   }
 
-  const reasonConfig = FAILURE_REASONS[job.reason] ?? FAILURE_REASONS.error;
-  const heading = job.kind === "review"
-    ? (job.reason === "error" ? "mcode review failed." : job.reason === "timeout" ? "mcode review timed out." : job.reason === "limit-exceeded" ? "mcode review exceeded step limit." : reasonConfig.heading)
-    : reasonConfig.heading;
+  const heading = getFailureHeading(job.reason, noun);
 
   if (job.reason === "needs-interaction") {
     const command = sessionId ? `mcode --session ${sessionId}` : "mcode";
@@ -112,11 +118,10 @@ export function renderDelegationResult(job) {
     ].filter(Boolean).join("\n") + "\n";
   }
 
+  const reasonConfig = FAILURE_REASONS[job.reason] ?? FAILURE_REASONS.error;
   const err = job.error?.message || job.stderr || reasonConfig.defaultMessage;
   return `${prefix}${heading}\n\n${err}${sessionFooter}\n`;
 }
-
-export const renderJobResult = renderDelegationResult;
 
 export function formatAge(dateStr, now = Date.now()) {
   const ts = new Date(dateStr).getTime();
