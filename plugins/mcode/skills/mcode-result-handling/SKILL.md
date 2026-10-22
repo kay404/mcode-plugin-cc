@@ -16,3 +16,4 @@ When the helper returns mcode output:
 - Read-only violations are surfaced first before any mcode output, listing changed paths, HEAD movements, or stash changes; if the check could not run (e.g. outside a git repository or git status failed), surface that notice first.
 - Note that the read-only guard inspects tracked and untracked repository paths, but cannot detect modifications to gitignored files (such as .env or build output); never promise that gitignored files were untouched.
 - If setup, installation, or authentication issues are encountered, direct the user to `/mcode:setup`.
+- After presenting review findings, STOP and ask the user which findings to fix; never auto-fix.

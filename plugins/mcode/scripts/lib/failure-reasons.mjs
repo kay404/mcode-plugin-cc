@@ -19,6 +19,10 @@ export const FAILURE_REASONS = {
     heading: "Unsupported mcode output version.",
     defaultMessage: "The mcode version emitted an unrecognized output stream schema."
   },
+  "review-result-invalid": {
+    heading: "mcode review produced an invalid result.",
+    defaultMessage: "Review result was invalid or could not be parsed."
+  },
   "error": {
     heading: "mcode delegation failed.",
     defaultMessage: "Unknown failure."

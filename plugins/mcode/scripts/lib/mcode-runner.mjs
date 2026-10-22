@@ -16,11 +16,25 @@ export function buildMcodeArgv(options) {
     permission = "smart",
     model,
     effort,
-    session
+    session,
+    command
   } = options;
 
   if (permission === "off") {
     throw new Error("Permission level 'off' is disabled in the mcode plugin for safety.");
+  }
+
+  if (command === "review") {
+    return [
+      "exec",
+      "review",
+      "--cwd",
+      cwd,
+      "--permission",
+      permission,
+      "--output-format",
+      "stream-json"
+    ];
   }
 
   const argv = [
@@ -132,6 +146,14 @@ export function mapMcodeResultToOutcome(execResult, stderr = "") {
   }
   if (isNeedsInteraction(error, stderr)) {
     return { ...base, reason: "needs-interaction", error: error ?? { message: FAILURE_REASONS["needs-interaction"].defaultMessage } };
+  }
+  if (error?.code && error.code.startsWith("REVIEW_")) {
+    const reasonKey = error.code.toLowerCase().replace(/_/g, "-");
+    return {
+      ...base,
+      reason: reasonKey,
+      error: error ?? { message: FAILURE_REASONS[reasonKey]?.defaultMessage || FAILURE_REASONS.error.defaultMessage }
+    };
   }
 
   return { ...base, error: error ?? { message: stderr.trim() || FAILURE_REASONS.error.defaultMessage } };

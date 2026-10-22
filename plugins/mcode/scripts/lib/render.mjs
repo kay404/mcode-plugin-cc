@@ -1,7 +1,7 @@
 import { FAILURE_REASONS } from "./failure-reasons.mjs";
 import { GUARD_REASONS } from "./workspace-guard.mjs";
 
-function renderReadOnlyPrefix(guard) {
+function renderReadOnlyPrefix(guard, jobKind) {
   if (!guard) return "";
 
   if (!guard.checked) {
@@ -22,34 +22,89 @@ function renderReadOnlyPrefix(guard) {
 
   if (items.length > 0) {
     const list = items.map((item) => `  - ${item}`).join("\n");
-    return `Read-only violation: files were modified during a read-only delegation:\n${list}\n\n`;
+    const noun = jobKind === "review" ? "review" : "delegation";
+    return `Read-only violation: files were modified during a read-only ${noun}:\n${list}\n\n`;
   }
 
   return "";
 }
 
+export function renderReviewOutput(output) {
+  if (typeof output === "string") {
+    return output.trim();
+  }
+  if (!output || typeof output !== "object") {
+    return "";
+  }
+  const lines = [];
+  if (output.summary) {
+    lines.push(output.summary.trim());
+  }
+  if (Array.isArray(output.findings) && output.findings.length > 0) {
+    for (const f of output.findings) {
+      const parts = [];
+      const priority = f.priority ? `[${f.priority}] ` : "";
+      const title = f.title || "";
+      if (priority || title) {
+        parts.push(`${priority}${title}`.trim());
+      }
+      const locParts = [];
+      if (f.path) {
+        let loc = f.path;
+        if (f.startLine !== undefined && f.startLine !== null) {
+          loc += `:${f.startLine}`;
+          if (f.endLine !== undefined && f.endLine !== null && f.endLine !== f.startLine) {
+            loc += `-${f.endLine}`;
+          }
+        }
+        locParts.push(loc);
+      }
+      if (f.side) {
+        locParts.push(`(${f.side})`);
+      }
+      if (locParts.length > 0) {
+        parts.push(locParts.join(" "));
+      }
+      if (f.content) {
+        parts.push(f.content.trim());
+      }
+      if (parts.length > 0) {
+        lines.push("");
+        lines.push(parts.join("\n"));
+      }
+    }
+  }
+  return lines.join("\n").trim();
+}
+
 export function renderDelegationResult(job) {
-  const prefix = renderReadOnlyPrefix(job.readOnlyGuard);
+  const prefix = renderReadOnlyPrefix(job.readOnlyGuard, job.kind);
   const sessionId = job.mcodeSessionId;
   const sessionFooter = sessionId
     ? `\n\n---\nmcode session: ${sessionId}\nTo open this session in the mcode TUI: mcode --session ${sessionId}`
     : "";
 
   if (job.status === "completed") {
-    const rawOutput = (job.output ?? "").trim();
+    const rawOutput = job.kind === "review"
+      ? renderReviewOutput(job.output)
+      : (typeof job.output === "string" ? job.output.trim() : renderReviewOutput(job.output));
     return `${prefix}${rawOutput}${sessionFooter}\n`;
   }
 
   if (job.status === "cancelled") {
-    return `${prefix}mcode delegation was cancelled.${sessionFooter}\n`;
+    const noun = job.kind === "review" ? "mcode review" : "mcode delegation";
+    return `${prefix}${noun} was cancelled.${sessionFooter}\n`;
   }
 
   const reasonConfig = FAILURE_REASONS[job.reason] ?? FAILURE_REASONS.error;
+  const heading = job.kind === "review"
+    ? (job.reason === "error" ? "mcode review failed." : job.reason === "timeout" ? "mcode review timed out." : job.reason === "limit-exceeded" ? "mcode review exceeded step limit." : reasonConfig.heading)
+    : reasonConfig.heading;
 
   if (job.reason === "needs-interaction") {
     const command = sessionId ? `mcode --session ${sessionId}` : "mcode";
     return prefix + [
-      reasonConfig.heading,
+      heading,
       "",
       "To continue this session interactively, run:",
       `  ${command}`,
@@ -58,8 +113,10 @@ export function renderDelegationResult(job) {
   }
 
   const err = job.error?.message || job.stderr || reasonConfig.defaultMessage;
-  return `${prefix}${reasonConfig.heading}\n\n${err}${sessionFooter}\n`;
+  return `${prefix}${heading}\n\n${err}${sessionFooter}\n`;
 }
+
+export const renderJobResult = renderDelegationResult;
 
 export function formatAge(dateStr, now = Date.now()) {
   const ts = new Date(dateStr).getTime();

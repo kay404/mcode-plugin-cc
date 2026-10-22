@@ -40,6 +40,12 @@ export const CANCEL_OPTION_CONFIG = {
   supportedHint: "--json"
 };
 
+export const REVIEW_OPTION_CONFIG = {
+  valueOptions: [],
+  booleanOptions: ["background", "wait", "json"],
+  supportedHint: "--wait, --background, --json"
+};
+
 const SUPPORTED_OPTIONS_HINT = "--read-only, --full, --model <value>, --effort <value>, --json";
 
 export function parseArgs(argv, config = {}) {
