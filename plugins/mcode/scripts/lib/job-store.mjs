@@ -202,6 +202,28 @@ export function findLatestFinishedJob(cwd, options = {}) {
   return loadJobOrThrow(cwd, finished.id);
 }
 
+export function findResumeCandidate(cwd, options = {}) {
+  const candidates = filterJobsBySession(loadState(cwd).jobs, options);
+  const match = candidates.find(
+    (j) => j.kind === "delegate" && FINISHED_STATUSES.has(j.status) && Boolean(j.mcodeSessionId)
+  );
+  if (!match) {
+    return null;
+  }
+  return loadJobOrThrow(cwd, match.id);
+}
+
+export function findActiveDelegation(cwd, options = {}) {
+  const candidates = filterJobsBySession(loadState(cwd).jobs, options);
+  const match = candidates.find(
+    (j) => j.kind === "delegate" && (j.status === "running" || j.status === "queued")
+  );
+  if (!match) {
+    return null;
+  }
+  return loadJobOrThrow(cwd, match.id);
+}
+
 export function findJob(cwd, selector, options = {}) {
   const candidates = filterJobsBySession(loadState(cwd).jobs, options);
   const exactMatch = candidates.find((j) => j.id === selector);

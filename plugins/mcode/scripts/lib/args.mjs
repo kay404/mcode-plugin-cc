@@ -1,10 +1,16 @@
 export const DELEGATE_OPTION_CONFIG = {
   valueOptions: ["model", "effort"],
-  booleanOptions: ["read-only", "full", "json"],
-  supportedHint: "--read-only, --full, --model <value>, --effort <value>, --json"
+  booleanOptions: ["read-only", "full", "resume", "fresh", "json"],
+  supportedHint: "--read-only, --full, --resume, --fresh, --model <value>, --effort <value>, --json"
 };
 
 export const SETUP_OPTION_CONFIG = {
+  valueOptions: [],
+  booleanOptions: ["json"],
+  supportedHint: "--json"
+};
+
+export const RESUME_CANDIDATE_OPTION_CONFIG = {
   valueOptions: [],
   booleanOptions: ["json"],
   supportedHint: "--json"
