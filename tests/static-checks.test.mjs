@@ -98,11 +98,11 @@ test("all plugin command, agent, and skill markdown files have valid frontmatter
 });
 
 test("companion subcommands referenced from markdown are implemented", () => {
-  const implementedSubcommands = new Set(["delegate", "setup"]);
+  const implementedSubcommands = new Set(["delegate", "setup", "status", "result"]);
 
   for (const filePath of ALL_PLUGIN_MARKDOWN_FILES) {
     const content = fs.readFileSync(filePath, "utf8");
-    const subcmdMatches = content.matchAll(/mcode-companion\.mjs\s+([a-zA-Z0-9_-]+)/g);
+    const subcmdMatches = content.matchAll(/mcode-companion\.mjs["']?\s+([a-zA-Z0-9_-]+)/g);
     for (const match of subcmdMatches) {
       const subcmd = match[1];
       assert.ok(

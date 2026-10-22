@@ -10,12 +10,24 @@ export const SETUP_OPTION_CONFIG = {
   supportedHint: "--json"
 };
 
-const DEFAULT_SUPPORTED_HINT = "--read-only, --full, --model <value>, --effort <value>, --json";
+export const STATUS_OPTION_CONFIG = {
+  valueOptions: [],
+  booleanOptions: ["all", "json"],
+  supportedHint: "--all, --json"
+};
+
+export const RESULT_OPTION_CONFIG = {
+  valueOptions: [],
+  booleanOptions: ["all", "json"],
+  supportedHint: "--all, --json"
+};
+
+const SUPPORTED_OPTIONS_HINT = "--read-only, --full, --model <value>, --effort <value>, --json";
 
 export function parseArgs(argv, config = {}) {
   const valueOptions = new Set(config.valueOptions ?? []);
   const booleanOptions = new Set(config.booleanOptions ?? []);
-  const supportedHint = config.supportedHint ?? DEFAULT_SUPPORTED_HINT;
+  const supportedHint = config.supportedHint ?? SUPPORTED_OPTIONS_HINT;
   const options = {};
   const positionals = [];
   let passthrough = false;

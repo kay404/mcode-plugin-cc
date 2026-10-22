@@ -7,6 +7,20 @@
       "active": true,
       "enabled": true,
       "hasApiKey": false
+    },
+    {
+      "providerId": "minimax_api",
+      "kind": "minimax-api-key",
+      "active": false,
+      "enabled": true,
+      "hasApiKey": false
+    },
+    {
+      "providerId": "custom_provider:magpie",
+      "kind": "custom",
+      "active": true,
+      "enabled": true,
+      "hasApiKey": true
     }
   ]
 }

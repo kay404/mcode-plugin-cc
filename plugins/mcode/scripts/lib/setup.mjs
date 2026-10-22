@@ -1,15 +1,18 @@
 import { spawnSync } from "node:child_process";
 import process from "node:process";
 
-const REQUIRED_NODE_RANGE = ">=22.19 <23 || >=24 <27";
+export const REQUIRED_NODE_RANGE = ">=22.19 <23 || >=24 <27";
 const OFFICIAL_INSTALL_CMD = "npm install -g @minimax-ai/code --allow-scripts=@minimax-ai/code,better-sqlite3 --registry=https://registry.npmjs.org/";
-const OFFICIAL_INSTALL_CITATION = "~/.minimax-code/releases/0.6.12/lib/node_modules/@minimax-ai/code/README.md";
 
-export function checkNodeVersion(versionStr = process.env.MCODE_NODE_VERSION || process.versions.node) {
+export function isNodeVersionSupported(versionStr = process.versions.node) {
   const parts = versionStr.split(".").map((s) => parseInt(s, 10));
   const major = parts[0] ?? -1;
   const minor = parts[1] ?? 0;
-  const ok = (major === 22 && minor >= 19) || (major >= 24 && major < 27);
+  return (major === 22 && minor >= 19) || (major >= 24 && major < 27);
+}
+
+export function checkNodeVersion(versionStr = process.versions.node) {
+  const ok = isNodeVersionSupported(versionStr);
   return {
     ok,
     version: versionStr,
@@ -38,17 +41,16 @@ export function checkHeadlessExec() {
 export function checkProvider() {
   const res = spawnSync("mcode", ["provider", "list", "--json"], { encoding: "utf8" });
   if (res.error || res.status !== 0) {
-    return { ok: false, activeProviderId: null };
+    return { ok: false, verdict: "not-ready", nextStep: "! mcode login", activeProviders: [] };
   }
 
   let raw;
   try {
     raw = JSON.parse(res.stdout ?? "");
   } catch {
-    return { ok: false, activeProviderId: null };
+    return { ok: false, verdict: "not-ready", nextStep: "! mcode login", activeProviders: [] };
   }
 
-  const minimaxModelSource = raw?.minimaxModelSource ?? null;
   const rawProviders = Array.isArray(raw?.providers) ? raw.providers : [];
 
   // Retain ONLY allowed fields to prevent any secret exposure
@@ -60,17 +62,46 @@ export function checkProvider() {
     hasApiKey: Boolean(p.hasApiKey)
   }));
 
-  const usable = providers.find((p) => {
-    if (!p.active || !p.enabled) return false;
-    if (p.kind === "minimax-oauth") {
-      return minimaxModelSource === "token_plan" || p.active;
+  const activeProviders = [];
+  for (const p of providers) {
+    if (p.active && p.enabled) {
+      let state;
+      if (p.hasApiKey) {
+        state = "verified";
+      } else if (p.kind === "minimax-oauth") {
+        state = "unverified (login not checked)";
+      } else {
+        state = "unverified (no api key)";
+      }
+      activeProviders.push({
+        providerId: p.providerId,
+        kind: p.kind,
+        state
+      });
     }
-    return p.hasApiKey === true;
-  });
+  }
+
+  const hasVerified = activeProviders.some((p) => p.state === "verified");
+  const hasUnverifiedOauth = activeProviders.some((p) => p.state === "unverified (login not checked)");
+
+  let verdict;
+  let nextStep = null;
+
+  if (hasVerified) {
+    verdict = "ready";
+  } else if (hasUnverifiedOauth) {
+    verdict = "ready (login unverified)";
+    nextStep = "If delegations fail on auth, run: ! mcode login";
+  } else {
+    verdict = "not-ready";
+    nextStep = "! mcode login";
+  }
 
   return {
-    ok: Boolean(usable),
-    activeProviderId: usable ? usable.providerId : null
+    ok: hasVerified || hasUnverifiedOauth,
+    verdict,
+    nextStep,
+    activeProviders
   };
 }
 
@@ -78,50 +109,69 @@ export function runSetupChecks() {
   const nodeCheck = checkNodeVersion();
   const mcodeCheck = checkMcodeVersion();
   const headlessCheck = mcodeCheck.ok ? checkHeadlessExec() : { ok: false };
-  const providerCheck = mcodeCheck.ok ? checkProvider() : { ok: false, activeProviderId: null };
+  const providerCheck = mcodeCheck.ok
+    ? checkProvider()
+    : { ok: false, verdict: "not-ready", nextStep: "! mcode login", activeProviders: [] };
 
-  const ready = nodeCheck.ok && mcodeCheck.ok && headlessCheck.ok && providerCheck.ok;
-  const verdict = ready ? "ready" : "not-ready";
-
+  let verdict = "ready";
   let nextStep = null;
-  if (!ready) {
-    if (!nodeCheck.ok) {
-      nextStep = `Node.js in range ${REQUIRED_NODE_RANGE} is required (current: ${nodeCheck.version}).`;
-    } else if (!mcodeCheck.ok) {
-      nextStep = `Install mcode:\n  ${OFFICIAL_INSTALL_CMD}\n(Official install command cited from ${OFFICIAL_INSTALL_CITATION})`;
-    } else if (!headlessCheck.ok) {
-      nextStep = `mcode headless exec is unavailable. Reinstall or update mcode:\n  ${OFFICIAL_INSTALL_CMD}\n(Official install command cited from ${OFFICIAL_INSTALL_CITATION})`;
-    } else if (!providerCheck.ok) {
-      nextStep = "! mcode login";
-    }
+
+  if (!nodeCheck.ok) {
+    verdict = "not-ready";
+    nextStep = `Node.js in range ${REQUIRED_NODE_RANGE} is required (current: ${nodeCheck.version}).`;
+  } else if (!mcodeCheck.ok) {
+    verdict = "not-ready";
+    nextStep = OFFICIAL_INSTALL_CMD;
+  } else if (!headlessCheck.ok) {
+    verdict = "not-ready";
+    nextStep = `mcode headless exec is unavailable. Reinstall or update mcode:\n  ${OFFICIAL_INSTALL_CMD}`;
+  } else if (!providerCheck.ok) {
+    verdict = "not-ready";
+    nextStep = providerCheck.nextStep || "! mcode login";
+  } else if (providerCheck.verdict === "ready (login unverified)") {
+    verdict = "ready (login unverified)";
+    nextStep = providerCheck.nextStep;
   }
 
   return {
     verdict,
     mcodeVersion: mcodeCheck.version,
-    activeProviderId: providerCheck.activeProviderId,
+    activeProviders: providerCheck.activeProviders,
     nextStep,
     checks: {
       node: nodeCheck,
       mcode: mcodeCheck,
       headless: headlessCheck,
-      provider: providerCheck
+      provider: {
+        ok: providerCheck.ok,
+        verdict: providerCheck.verdict,
+        providers: providerCheck.activeProviders
+      }
     }
   };
 }
 
 export function renderSetupResult(result) {
-  if (result.verdict === "ready") {
-    return [
-      "Verdict: ready",
-      `mcode version: ${result.mcodeVersion}`,
-      `Active provider: ${result.activeProviderId}`
-    ].join("\n") + "\n";
+  const lines = [`Verdict: ${result.verdict}`];
+
+  if (result.mcodeVersion) {
+    lines.push(`mcode version: ${result.mcodeVersion}`);
   }
 
-  const lines = ["Verdict: not-ready", "", "Next step:"];
-  for (const line of (result.nextStep ?? "").split("\n")) {
-    lines.push(`  ${line}`);
+  if (result.activeProviders && result.activeProviders.length > 0) {
+    lines.push("Active providers:");
+    for (const p of result.activeProviders) {
+      lines.push(`  - ${p.providerId} (${p.state})`);
+    }
   }
+
+  if (result.nextStep) {
+    const label = result.verdict === "ready (login unverified)" ? "Hint:" : "Next step:";
+    lines.push("", label);
+    for (const line of result.nextStep.split("\n")) {
+      lines.push(`  ${line}`);
+    }
+  }
+
   return lines.join("\n") + "\n";
 }

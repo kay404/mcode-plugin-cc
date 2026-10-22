@@ -10,7 +10,10 @@ This directory contains streaming JSONL fixtures used by the test harness to sim
 - **`needs-interaction.stream.jsonl`**: Hand-written from mcode source knowledge (`INTERACTION_NOT_AVAILABLE` error code; to be re-recorded).
 - **`timeout.stream.jsonl`**: Hand-written from mcode source knowledge (`status: "timeout"`; to be re-recorded).
 - **`limit-exceeded.stream.jsonl`**: Hand-written from mcode source knowledge (`status: "limit_exceeded"`; to be re-recorded).
-- **`provider-list.json`**: Fake fixture containing only allowed fields (providerId, kind, active, enabled, hasApiKey, minimaxModelSource) with fake values.
+- **`provider-list.json`**: Fake fixture containing only allowed fields (both key and OAuth providers; this machine's shape) with fake values.
+- **`provider-list-key-only.json`**: Fake fixture containing only a verified key provider.
+- **`provider-list-oauth-only.json`**: Fake fixture containing only an unverified OAuth provider.
+- **`provider-list-none-active.json`**: Fake fixture containing no active providers.
 
 ## Smart-Permission Behaviour Finding
 

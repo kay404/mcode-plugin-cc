@@ -1,96 +1,121 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { isNodeVersionSupported } from "../plugins/mcode/scripts/lib/setup.mjs";
+import { runCompanion, makeTempDir } from "./helpers/run-companion.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT_DIR = path.resolve(__dirname, "..");
-const COMPANION_SCRIPT = path.join(ROOT_DIR, "plugins/mcode/scripts/mcode-companion.mjs");
-const FAKE_MCODE = path.join(ROOT_DIR, "tests/helpers/fake-mcode.mjs");
+const FIXTURES_DIR = path.join(__dirname, "fixtures");
 
-function runCompanion(args, options = {}) {
-  const pluginDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcode-test-data-"));
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcode-test-bin-"));
+test("node version range check pure function covers required bounds", () => {
+  assert.equal(isNodeVersionSupported("22.18.0"), false);
+  assert.equal(isNodeVersionSupported("22.19.0"), true);
+  assert.equal(isNodeVersionSupported("22.20.1"), true);
+  assert.equal(isNodeVersionSupported("23.0.0"), false);
+  assert.equal(isNodeVersionSupported("23.9.0"), false);
+  assert.equal(isNodeVersionSupported("24.0.0"), true);
+  assert.equal(isNodeVersionSupported("26.1.0"), true);
+  assert.equal(isNodeVersionSupported("27.0.0"), false);
+});
 
-  if (!options.noMcodeOnPath && !options.useRealMcode) {
-    const symlinkPath = path.join(binDir, "mcode");
-    try {
-      fs.symlinkSync(FAKE_MCODE, symlinkPath);
-    } catch {
-      fs.copyFileSync(FAKE_MCODE, symlinkPath);
-      fs.chmodSync(symlinkPath, 0o755);
+test("setup reports ready when key provider only is active", () => {
+  const res = runCompanion(["setup"], {
+    env: {
+      MCODE_PROVIDER_LIST_FIXTURE: path.join(FIXTURES_DIR, "provider-list-key-only.json")
     }
-  }
-
-  const nodeDir = path.dirname(process.execPath);
-  let pathEnv;
-  if (options.useRealMcode) {
-    pathEnv = process.env.PATH;
-  } else if (options.noMcodeOnPath) {
-    pathEnv = `${nodeDir}:/usr/bin:/bin`;
-  } else {
-    pathEnv = `${binDir}:${process.env.PATH}`;
-  }
-
-  const combinedEnv = {
-    ...process.env,
-    PATH: pathEnv,
-    CLAUDE_PLUGIN_DATA: pluginDataDir,
-    CLAUDE_SESSION_ID: "test-claude-session-setup",
-    ...(options.env ?? {})
-  };
-
-  const result = spawnSync(process.execPath, [COMPANION_SCRIPT, ...args], {
-    cwd: ROOT_DIR,
-    env: combinedEnv,
-    encoding: "utf8"
   });
-
-  return {
-    status: result.status ?? 1,
-    stdout: result.stdout ?? "",
-    stderr: result.stderr ?? "",
-    error: result.error ?? null
-  };
-}
-
-test("setup reports ready verdict, mcode version, and active provider in text mode", () => {
-  const res = runCompanion(["setup"]);
 
   assert.equal(res.status, 0);
   assert.ok(res.stdout.includes("Verdict: ready"));
   assert.ok(res.stdout.includes("mcode version: 0.6.12"));
-  assert.ok(res.stdout.includes("Active provider: minimax_oauth"));
-  assert.equal(res.stderr, "");
+  assert.ok(res.stdout.includes("custom_provider:magpie (verified)"));
+  assert.ok(!res.stdout.includes("login unverified"));
 });
 
-test("setup reports ready verdict and complete checks in --json mode", () => {
-  const res = runCompanion(["setup", "--json"]);
+test("setup reports ready (login unverified) when only OAuth provider is active", () => {
+  const res = runCompanion(["setup"], {
+    env: {
+      MCODE_PROVIDER_LIST_FIXTURE: path.join(FIXTURES_DIR, "provider-list-oauth-only.json")
+    }
+  });
 
   assert.equal(res.status, 0);
-  const parsed = JSON.parse(res.stdout);
-  assert.equal(parsed.verdict, "ready");
-  assert.equal(parsed.mcodeVersion, "0.6.12");
-  assert.equal(parsed.activeProviderId, "minimax_oauth");
-  assert.equal(parsed.nextStep, null);
-  assert.equal(parsed.checks.node.ok, true);
-  assert.equal(parsed.checks.mcode.ok, true);
-  assert.equal(parsed.checks.mcode.version, "0.6.12");
-  assert.equal(parsed.checks.headless.ok, true);
-  assert.equal(parsed.checks.provider.ok, true);
-  assert.equal(parsed.checks.provider.activeProviderId, "minimax_oauth");
+  assert.ok(res.stdout.includes("Verdict: ready (login unverified)"));
+  assert.ok(res.stdout.includes("minimax_oauth (unverified (login not checked))"));
+  assert.ok(res.stdout.includes("! mcode login"));
+
+  const resJson = runCompanion(["setup", "--json"], {
+    env: {
+      MCODE_PROVIDER_LIST_FIXTURE: path.join(FIXTURES_DIR, "provider-list-oauth-only.json")
+    }
+  });
+  assert.equal(resJson.status, 0);
+  const parsed = JSON.parse(resJson.stdout);
+  assert.equal(parsed.verdict, "ready (login unverified)");
+  assert.equal(parsed.activeProviders[0].providerId, "minimax_oauth");
+  assert.equal(parsed.activeProviders[0].state, "unverified (login not checked)");
+  assert.ok(parsed.nextStep.includes("! mcode login"));
 });
 
-test("missing mcode on PATH reports not-ready and official install command citing README", () => {
+test("setup reports ready and all active providers when both key and OAuth are active", () => {
+  const res = runCompanion(["setup"], {
+    env: {
+      MCODE_PROVIDER_LIST_FIXTURE: path.join(FIXTURES_DIR, "provider-list.json")
+    }
+  });
+
+  assert.equal(res.status, 0);
+  assert.ok(res.stdout.includes("Verdict: ready"));
+  assert.ok(res.stdout.includes("minimax_oauth (unverified (login not checked))"));
+  assert.ok(res.stdout.includes("custom_provider:magpie (verified)"));
+
+  const resJson = runCompanion(["setup", "--json"], {
+    env: {
+      MCODE_PROVIDER_LIST_FIXTURE: path.join(FIXTURES_DIR, "provider-list.json")
+    }
+  });
+  assert.equal(resJson.status, 0);
+  const parsed = JSON.parse(resJson.stdout);
+  assert.equal(parsed.verdict, "ready");
+  assert.equal(parsed.activeProviders.length, 2);
+  const oauth = parsed.activeProviders.find((p) => p.providerId === "minimax_oauth");
+  const magpie = parsed.activeProviders.find((p) => p.providerId === "custom_provider:magpie");
+  assert.equal(oauth.state, "unverified (login not checked)");
+  assert.equal(magpie.state, "verified");
+});
+
+test("setup reports not-ready when no provider is active", () => {
+  const res = runCompanion(["setup"], {
+    env: {
+      MCODE_PROVIDER_LIST_FIXTURE: path.join(FIXTURES_DIR, "provider-list-none-active.json")
+    }
+  });
+
+  assert.notEqual(res.status, 0);
+  assert.ok(res.stdout.includes("Verdict: not-ready"));
+  assert.ok(res.stdout.includes("! mcode login"));
+
+  const resJson = runCompanion(["setup", "--json"], {
+    env: {
+      MCODE_PROVIDER_LIST_FIXTURE: path.join(FIXTURES_DIR, "provider-list-none-active.json")
+    }
+  });
+  assert.notEqual(resJson.status, 0);
+  const parsed = JSON.parse(resJson.stdout);
+  assert.equal(parsed.verdict, "not-ready");
+  assert.equal(parsed.nextStep, "! mcode login");
+});
+
+test("missing mcode on PATH prints install command without citation path", () => {
   const resText = runCompanion(["setup"], { noMcodeOnPath: true });
 
   assert.notEqual(resText.status, 0);
   assert.ok(resText.stdout.includes("Verdict: not-ready"));
   assert.ok(resText.stdout.includes("npm install -g @minimax-ai/code --allow-scripts=@minimax-ai/code,better-sqlite3 --registry=https://registry.npmjs.org/"));
-  assert.ok(resText.stdout.includes("~/.minimax-code/releases/0.6.12/lib/node_modules/@minimax-ai/code/README.md"));
+  assert.ok(!resText.stdout.includes(".minimax-code/releases"));
+  assert.ok(!resText.stdout.includes("README.md"));
 
   const resJson = runCompanion(["setup", "--json"], { noMcodeOnPath: true });
   assert.notEqual(resJson.status, 0);
@@ -98,67 +123,13 @@ test("missing mcode on PATH reports not-ready and official install command citin
   assert.equal(parsed.verdict, "not-ready");
   assert.equal(parsed.mcodeVersion, null);
   assert.equal(parsed.checks.mcode.ok, false);
-  assert.ok(parsed.nextStep.includes("npm install -g @minimax-ai/code"));
-});
-
-test("unsupported or old Node version reports not-ready and required range", () => {
-  const resText = runCompanion(["setup"], {
-    env: { MCODE_NODE_VERSION: "20.11.0" }
-  });
-
-  assert.notEqual(resText.status, 0);
-  assert.ok(resText.stdout.includes("Verdict: not-ready"));
-  assert.ok(resText.stdout.includes(">=22.19 <23 || >=24 <27"));
-
-  const resJson = runCompanion(["setup", "--json"], {
-    env: { MCODE_NODE_VERSION: "23.1.0" }
-  });
-  assert.notEqual(resJson.status, 0);
-  const parsed = JSON.parse(resJson.stdout);
-  assert.equal(parsed.verdict, "not-ready");
-  assert.equal(parsed.checks.node.ok, false);
-  assert.equal(parsed.checks.node.version, "23.1.0");
-  assert.ok(parsed.nextStep.includes(">=22.19 <23 || >=24 <27"));
-});
-
-test("no usable provider suggests '! mcode login'", () => {
-  const emptyProviders = JSON.stringify({
-    minimaxModelSource: "token_plan",
-    providers: []
-  });
-
-  const resEmpty = runCompanion(["setup"], {
-    env: { MCODE_PROVIDER_LIST_JSON: emptyProviders }
-  });
-  assert.notEqual(resEmpty.status, 0);
-  assert.ok(resEmpty.stdout.includes("Verdict: not-ready"));
-  assert.ok(resEmpty.stdout.includes("! mcode login"));
-
-  const unauthenticatedApiKey = JSON.stringify({
-    minimaxModelSource: "minimax_api_key",
-    providers: [
-      {
-        providerId: "minimax_api",
-        kind: "minimax-api-key",
-        active: true,
-        enabled: true,
-        hasApiKey: false
-      }
-    ]
-  });
-
-  const resApiKey = runCompanion(["setup", "--json"], {
-    env: { MCODE_PROVIDER_LIST_JSON: unauthenticatedApiKey }
-  });
-  assert.notEqual(resApiKey.status, 0);
-  const parsed = JSON.parse(resApiKey.stdout);
-  assert.equal(parsed.verdict, "not-ready");
-  assert.equal(parsed.checks.provider.ok, false);
-  assert.equal(parsed.nextStep, "! mcode login");
+  assert.equal(parsed.nextStep, "npm install -g @minimax-ai/code --allow-scripts=@minimax-ai/code,better-sqlite3 --registry=https://registry.npmjs.org/");
 });
 
 test("provider check never leaks maskedApiKey or baseUrl into output", () => {
-  const providerListWithSecrets = JSON.stringify({
+  const tempDir = makeTempDir("mcode-secret-fixture-");
+  const secretFixtureFile = path.join(tempDir, "provider-secrets.json");
+  const secretData = JSON.stringify({
     minimaxModelSource: "token_plan",
     providers: [
       {
@@ -171,10 +142,11 @@ test("provider check never leaks maskedApiKey or baseUrl into output", () => {
         baseUrl: "https://secret-base-url.internal.domain.com/v1"
       }
     ]
-  });
+  }, null, 2);
+  fs.writeFileSync(secretFixtureFile, secretData, "utf8");
 
   const resText = runCompanion(["setup"], {
-    env: { MCODE_PROVIDER_LIST_JSON: providerListWithSecrets }
+    env: { MCODE_PROVIDER_LIST_FIXTURE: secretFixtureFile }
   });
   assert.equal(resText.status, 0);
   assert.ok(!resText.stdout.includes("sk-SECRET-MASKED-KEY-XYZ"));
@@ -183,7 +155,7 @@ test("provider check never leaks maskedApiKey or baseUrl into output", () => {
   assert.ok(!resText.stderr.includes("secret-base-url"));
 
   const resJson = runCompanion(["setup", "--json"], {
-    env: { MCODE_PROVIDER_LIST_JSON: providerListWithSecrets }
+    env: { MCODE_PROVIDER_LIST_FIXTURE: secretFixtureFile }
   });
   assert.equal(resJson.status, 0);
   assert.ok(!resJson.stdout.includes("sk-SECRET-MASKED-KEY-XYZ"));
@@ -200,18 +172,20 @@ test("setup rejects unsupported options with clear hint", () => {
   assert.ok(res.stderr.includes("Supported options: --json"));
 });
 
-test("setup verifies against the real mcode on this machine", () => {
+test("setup verifies against real mcode on this machine", () => {
   const res = runCompanion(["setup"], { useRealMcode: true });
 
   assert.equal(res.status, 0);
   assert.ok(res.stdout.includes("Verdict: ready"));
   assert.ok(res.stdout.includes("mcode version: 0.6.12"));
-  assert.ok(res.stdout.includes("Active provider: minimax_oauth"));
+  assert.ok(res.stdout.includes("custom_provider:magpie (verified)"));
+  assert.ok(res.stdout.includes("minimax_oauth (unverified (login not checked))"));
 
   const resJson = runCompanion(["setup", "--json"], { useRealMcode: true });
   assert.equal(resJson.status, 0);
   const parsed = JSON.parse(resJson.stdout);
   assert.equal(parsed.verdict, "ready");
   assert.equal(parsed.mcodeVersion, "0.6.12");
-  assert.equal(parsed.activeProviderId, "minimax_oauth");
+  assert.ok(parsed.activeProviders.some((p) => p.providerId === "custom_provider:magpie" && p.state === "verified"));
+  assert.ok(parsed.activeProviders.some((p) => p.providerId === "minimax_oauth" && p.state === "unverified (login not checked)"));
 });

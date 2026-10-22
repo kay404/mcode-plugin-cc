@@ -1,0 +1,12 @@
+{
+  "minimaxModelSource": "token_plan",
+  "providers": [
+    {
+      "providerId": "minimax_oauth",
+      "kind": "minimax-oauth",
+      "active": true,
+      "enabled": true,
+      "hasApiKey": false
+    }
+  ]
+}
