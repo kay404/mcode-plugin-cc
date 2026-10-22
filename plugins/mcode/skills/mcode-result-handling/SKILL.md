@@ -13,4 +13,5 @@ When the helper returns mcode output:
 - For `mcode:mcode-delegate`, do not turn a failed or incomplete mcode run into a Claude-side implementation attempt. Report the failure and stop.
 - If mcode failed or was never successfully invoked, do not generate a substitute answer.
 - If the output indicates that interactive approval was needed (`needs-interaction`), inform the user to continue in the mcode TUI with `mcode --session <id>`.
+- Read-only violations are surfaced first before any mcode output, listing the changed paths; if the check could not run (e.g. outside a git repository), surface that notice first.
 - If setup, installation, or authentication issues are encountered, direct the user to `/mcode:setup`.

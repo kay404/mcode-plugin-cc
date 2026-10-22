@@ -1,6 +1,14 @@
 import { FAILURE_REASONS } from "./failure-reasons.mjs";
 
 export function renderDelegationResult(job) {
+  let prefix = "";
+  if (job.readOnlyViolation?.changedPaths?.length) {
+    const fileList = job.readOnlyViolation.changedPaths.map((p) => `  - ${p}`).join("\n");
+    prefix = `Read-only violation: files were modified during a read-only delegation:\n${fileList}\n\n`;
+  } else if (job.readOnly && job.readOnlyGuard && !job.readOnlyGuard.checked) {
+    prefix = "Read-only check could not run: not a git repository.\n\n";
+  }
+
   const sessionId = job.mcodeSessionId;
   const sessionFooter = sessionId
     ? `\n\n---\nmcode session: ${sessionId}\nTo open this session in the mcode TUI: mcode --session ${sessionId}`
@@ -8,18 +16,18 @@ export function renderDelegationResult(job) {
 
   if (job.status === "completed") {
     const rawOutput = (job.output ?? "").trim();
-    return `${rawOutput}${sessionFooter}\n`;
+    return `${prefix}${rawOutput}${sessionFooter}\n`;
   }
 
   if (job.status === "cancelled") {
-    return `mcode delegation was cancelled.${sessionFooter}\n`;
+    return `${prefix}mcode delegation was cancelled.${sessionFooter}\n`;
   }
 
   const reasonConfig = FAILURE_REASONS[job.reason] ?? FAILURE_REASONS.error;
 
   if (job.reason === "needs-interaction") {
     const command = sessionId ? `mcode --session ${sessionId}` : "mcode";
-    return [
+    return prefix + [
       reasonConfig.heading,
       "",
       "To continue this session interactively, run:",
@@ -29,11 +37,11 @@ export function renderDelegationResult(job) {
   }
 
   const err = job.error?.message || job.stderr || reasonConfig.defaultMessage;
-  return `${reasonConfig.heading}\n\n${err}${sessionFooter}\n`;
+  return `${prefix}${reasonConfig.heading}\n\n${err}${sessionFooter}\n`;
 }
 
 export function buildJobJsonPayload(job) {
-  return {
+  const payload = {
     id: job.id,
     kind: job.kind,
     status: job.status,
@@ -47,4 +55,16 @@ export function buildJobJsonPayload(job) {
     createdAt: job.createdAt,
     updatedAt: job.updatedAt
   };
+
+  if (job.readOnly !== undefined) {
+    payload.readOnly = job.readOnly;
+  }
+  if (job.readOnlyViolation !== undefined) {
+    payload.readOnlyViolation = job.readOnlyViolation;
+  }
+  if (job.readOnlyGuard !== undefined) {
+    payload.readOnlyGuard = job.readOnlyGuard;
+  }
+
+  return payload;
 }

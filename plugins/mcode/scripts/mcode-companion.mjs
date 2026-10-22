@@ -10,6 +10,7 @@ import {
 } from "./lib/job-store.mjs";
 import { runMcode, wrapReadOnlyPrompt } from "./lib/mcode-runner.mjs";
 import { renderDelegationResult, buildJobJsonPayload } from "./lib/render.mjs";
+import { captureWorkspaceSnapshot, evaluateWorkspaceGuard } from "./lib/workspace-guard.mjs";
 
 function printUsage() {
   console.log([
@@ -44,6 +45,8 @@ async function handleDelegate(rawTokens) {
   const jobId = generateJobId("delegate");
   const createdAt = new Date().toISOString();
 
+  const snapshotBefore = readOnly ? captureWorkspaceSnapshot(workspaceRoot) : null;
+
   const job = {
     id: jobId,
     kind: "delegate",
@@ -60,6 +63,8 @@ async function handleDelegate(rawTokens) {
     output: null,
     error: null,
     usage: null,
+    readOnlyViolation: null,
+    readOnlyGuard: null,
     createdAt,
     updatedAt: createdAt
   };
@@ -91,6 +96,27 @@ async function handleDelegate(rawTokens) {
       mcodeSessionId: err.sessionId ?? null,
       exitCode: 1,
       stderr: err.message
+    };
+  }
+
+  if (readOnly) {
+    const guardResult = evaluateWorkspaceGuard(snapshotBefore, workspaceRoot);
+    if (guardResult.violation) {
+      job.readOnlyViolation = {
+        changedPaths: guardResult.changedPaths,
+        paths: guardResult.changedPaths
+      };
+      appendJobLog(
+        workspaceRoot,
+        jobId,
+        `Read-only violation detected: ${guardResult.changedPaths.join(", ")}`
+      );
+    }
+    job.readOnlyGuard = {
+      checked: guardResult.checked,
+      reason: guardResult.reason,
+      violation: guardResult.violation,
+      changedPaths: guardResult.changedPaths
     };
   }
 
