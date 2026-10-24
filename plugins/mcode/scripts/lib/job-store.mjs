@@ -245,15 +245,19 @@ export function terminateJobProcess(pid, { graceMs = 200 } = {}) {
     return;
   }
 
-  const start = Date.now();
-  while (Date.now() - start < graceMs) {
-    if (!isProcessAlive(pid)) return;
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+  function waitForExit(ms) {
+    const start = Date.now();
+    while (Date.now() - start < ms) {
+      if (!isProcessAlive(pid)) return true;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    }
+    return !isProcessAlive(pid);
   }
 
-  if (isProcessAlive(pid)) {
-    sendSignal("SIGKILL");
-  }
+  if (waitForExit(graceMs)) return;
+  sendSignal("SIGKILL");
+  // Callers read the Job right after this returns, so the process must be gone by then.
+  waitForExit(1000);
 }
 
 export function findLatestFinishedJob(cwd, options = {}) {
