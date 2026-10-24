@@ -23,10 +23,10 @@ Operating rules:
     If the user chooses "Continue the current mcode session", delegate with `--resume`.
     If the user chooses "Start a new mcode session", delegate with `--fresh`.
   - If no candidate exists (`hasCandidate: false`), proceed with delegation directly without asking.
-- The subagent is a thin forwarder only. It uses exactly one `Bash` call to invoke `node "${CLAUDE_PLUGIN_ROOT}/scripts/mcode-companion.mjs" delegate ...` and returns that command's stdout as-is.
+- The subagent is a thin forwarder only. It starts the Delegation as a background Job, waits for it with `status --wait`, and returns the `result` output as-is (or the launch output when the user asked for `--background`).
 - Return the mcode companion stdout verbatim to the user.
 - Do not paraphrase, summarize, rewrite, or add commentary before or after it.
-- Do not ask the subagent to inspect files, monitor progress, poll status, or do independent work.
+- Do not ask the subagent to inspect files or do independent work.
 - Leave `--effort` unset unless the user explicitly asks for a specific reasoning effort.
 - Leave model unset unless the user explicitly asks for one.
 - Pass `--full` only when the user explicitly requests full permissions; default to write intent with smart permission.

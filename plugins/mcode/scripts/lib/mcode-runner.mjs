@@ -165,6 +165,14 @@ export async function runMcode(options) {
 
   return new Promise((resolve, reject) => {
     let capturedSessionId = options.session ?? null;
+
+    function captureSessionId(sessionId) {
+      if (!sessionId || sessionId === capturedSessionId) return;
+      capturedSessionId = sessionId;
+      try {
+        options.onSessionId?.(sessionId);
+      } catch {}
+    }
     let execCompletedResult = null;
     let stderr = "";
     let stdoutBuffer = "";
@@ -180,9 +188,7 @@ export async function runMcode(options) {
         return;
       }
 
-      if (event.sessionId) {
-        capturedSessionId = event.sessionId;
-      }
+      captureSessionId(event.sessionId);
 
       if (event.schemaVersion !== 1) {
         child.kill();
@@ -194,9 +200,7 @@ export async function runMcode(options) {
 
       if (event.type === "exec.completed") {
         execCompletedResult = event.result ?? null;
-        if (execCompletedResult?.sessionId) {
-          capturedSessionId = execCompletedResult.sessionId;
-        }
+        captureSessionId(execCompletedResult?.sessionId);
       }
 
       const progressMsg = describeProgress(event);
@@ -214,8 +218,11 @@ export async function runMcode(options) {
       try {
         child.kill(sig);
       } catch {}
-      const code = sig === "SIGINT" ? 130 : sig === "SIGTERM" ? 143 : 129;
-      process.exit(code);
+      try {
+        options.onSignal?.(sig);
+      } finally {
+        process.exit(sig === "SIGINT" ? 130 : sig === "SIGTERM" ? 143 : 129);
+      }
     };
 
     const onSigTerm = () => forwardSignal("SIGTERM");

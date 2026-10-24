@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -44,7 +44,7 @@ try {
   // Ignore if afterEach is called outside test context
 }
 
-export function runCompanion(args, options = {}) {
+function prepareCompanion(options) {
   const pluginDataDir = options.pluginDataDir ?? makeTempDir("mcode-test-data-");
   const binDir = makeTempDir("mcode-test-bin-");
 
@@ -76,6 +76,21 @@ export function runCompanion(args, options = {}) {
     MCODE_FIXTURE: path.join(FIXTURES_DIR, "success.stream.jsonl"),
     ...(options.env ?? {})
   };
+
+  return { pluginDataDir, combinedEnv, recordArgvFile, recordCwdFile, recordStdinFile };
+}
+
+export function spawnCompanion(args, options = {}) {
+  const { combinedEnv } = prepareCompanion(options);
+  return spawn(process.execPath, [COMPANION_SCRIPT, ...args], {
+    cwd: options.cwd ?? ROOT_DIR,
+    env: combinedEnv,
+    stdio: "ignore"
+  });
+}
+
+export function runCompanion(args, options = {}) {
+  const { pluginDataDir, combinedEnv, recordArgvFile, recordCwdFile, recordStdinFile } = prepareCompanion(options);
 
   const cwd = options.cwd ?? ROOT_DIR;
   const result = spawnSync(process.execPath, [COMPANION_SCRIPT, ...args], {

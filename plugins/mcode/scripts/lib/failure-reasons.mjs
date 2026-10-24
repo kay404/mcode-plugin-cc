@@ -34,6 +34,10 @@ export const FAILURE_REASONS = {
     heading: (noun) => `mcode ${noun} output did not match the required schema.`,
     defaultMessage: "Structured output did not match the expected schema."
   },
+  "process-lost": {
+    heading: (noun) => `mcode ${noun} stopped without recording a result.`,
+    defaultMessage: "The process running this Job exited unexpectedly (for example, it was killed). Changes it already made may remain in the working tree."
+  },
   "error": {
     heading: (noun = "delegation") => `mcode ${noun} failed.`,
     defaultMessage: "Unknown failure."

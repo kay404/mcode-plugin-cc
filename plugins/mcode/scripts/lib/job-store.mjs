@@ -210,6 +210,19 @@ export function findLatestActiveJob(cwd, options = {}) {
   return loadJobOrThrow(cwd, active.id);
 }
 
+// EPERM means the process exists but belongs to someone else.
+export function isProcessAlive(pid) {
+  for (const target of [-pid, pid]) {
+    try {
+      process.kill(target, 0);
+      return true;
+    } catch (err) {
+      if (err.code === "EPERM") return true;
+    }
+  }
+  return false;
+}
+
 export function terminateJobProcess(pid, { graceMs = 200 } = {}) {
   if (!pid || typeof pid !== "number") return;
 
@@ -228,31 +241,23 @@ export function terminateJobProcess(pid, { graceMs = 200 } = {}) {
     return sent;
   }
 
-  function isAlive() {
-    try {
-      process.kill(-pid, 0);
-      return true;
-    } catch {}
-    try {
-      process.kill(pid, 0);
-      return true;
-    } catch {}
-    return false;
-  }
-
   if (!sendSignal("SIGTERM")) {
     return;
   }
 
-  const start = Date.now();
-  while (Date.now() - start < graceMs) {
-    if (!isAlive()) return;
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+  function waitForExit(ms) {
+    const start = Date.now();
+    while (Date.now() - start < ms) {
+      if (!isProcessAlive(pid)) return true;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    }
+    return !isProcessAlive(pid);
   }
 
-  if (isAlive()) {
-    sendSignal("SIGKILL");
-  }
+  if (waitForExit(graceMs)) return;
+  sendSignal("SIGKILL");
+  // Callers read the Job right after this returns, so the process must be gone by then.
+  waitForExit(1000);
 }
 
 export function findLatestFinishedJob(cwd, options = {}) {
