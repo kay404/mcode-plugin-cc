@@ -210,15 +210,16 @@ export function findLatestActiveJob(cwd, options = {}) {
   return loadJobOrThrow(cwd, active.id);
 }
 
+// EPERM means the process exists but belongs to someone else.
 export function isProcessAlive(pid) {
-  try {
-    process.kill(-pid, 0);
-    return true;
-  } catch {}
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {}
+  for (const target of [-pid, pid]) {
+    try {
+      process.kill(target, 0);
+      return true;
+    } catch (err) {
+      if (err.code === "EPERM") return true;
+    }
+  }
   return false;
 }
 

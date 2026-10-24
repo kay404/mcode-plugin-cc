@@ -81,13 +81,12 @@ function prepareCompanion(options) {
 }
 
 export function spawnCompanion(args, options = {}) {
-  const { pluginDataDir, combinedEnv } = prepareCompanion(options);
-  const child = spawn(process.execPath, [COMPANION_SCRIPT, ...args], {
+  const { combinedEnv } = prepareCompanion(options);
+  return spawn(process.execPath, [COMPANION_SCRIPT, ...args], {
     cwd: options.cwd ?? ROOT_DIR,
     env: combinedEnv,
     stdio: "ignore"
   });
-  return { child, pluginDataDir };
 }
 
 export function runCompanion(args, options = {}) {

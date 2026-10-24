@@ -197,19 +197,32 @@ function markJobCancelled(job, workspaceRoot, logMessage) {
   saveJob(workspaceRoot, job);
 }
 
-// A SIGKILLed or crashed companion cannot record its own outcome; finish such Jobs on the next command.
-// debt: a reused PID makes a dead Job look alive until that process exits.
+const QUEUED_GRACE_MS = 60_000;
+
+// A SIGKILLed or crashed companion cannot record its own outcome; finish such Jobs when they are next read.
+// A queued Job has no process yet, so it counts as lost once its worker has had ample time to claim it.
+// debt: a reused PID makes a dead Job look alive until that process exits; record the process start time to tell them apart.
+function reconcileLostJob(workspaceRoot, job) {
+  const lost = job.status === "running"
+    ? Boolean(job.processId) && !isProcessAlive(job.processId)
+    : job.status === "queued" && Date.now() - Date.parse(job.createdAt) > QUEUED_GRACE_MS;
+  if (!lost) return job;
+  job.status = "failed";
+  job.reason = "process-lost";
+  job.error = null;
+  job.renderedOutput = renderDelegationResult(job);
+  appendJobLog(workspaceRoot, job.id, job.processId
+    ? `Process ${job.processId} exited without recording a result.`
+    : "Worker never started.");
+  saveJob(workspaceRoot, job);
+  return job;
+}
+
 function reconcileLostJobs(workspaceRoot) {
   for (const item of loadState(workspaceRoot).jobs) {
-    if (item.status !== "running") continue;
+    if (FINISHED_STATUSES.has(item.status)) continue;
     const job = loadJob(workspaceRoot, item.id);
-    if (!job || job.status !== "running" || !job.processId || isProcessAlive(job.processId)) continue;
-    job.status = "failed";
-    job.reason = "process-lost";
-    job.error = null;
-    job.renderedOutput = renderDelegationResult(job);
-    appendJobLog(workspaceRoot, job.id, `Process ${job.processId} exited without recording a result.`);
-    saveJob(workspaceRoot, job);
+    if (job) reconcileLostJob(workspaceRoot, job);
   }
 }
 
@@ -535,7 +548,7 @@ async function handleStatus(rawTokens) {
         process.exit(1);
       }
       await new Promise((resolve) => setTimeout(resolve, 500));
-      currentJob = loadJobOrThrow(workspaceRoot, job.id);
+      currentJob = reconcileLostJob(workspaceRoot, loadJobOrThrow(workspaceRoot, job.id));
     }
 
     const progressLines = readJobLogs(workspaceRoot, currentJob.id).slice(-10);
@@ -672,12 +685,18 @@ async function handleCancel(rawTokens) {
     terminateJobProcess(job.processId);
   }
 
-  markJobCancelled(job, workspaceRoot, "Job was cancelled.");
+  // The worker may have recorded its own cancellation, or newer fields, while it was being stopped.
+  const latest = loadJob(workspaceRoot, job.id) ?? job;
+  if (!FINISHED_STATUSES.has(latest.status)) {
+    markJobCancelled(latest, workspaceRoot, "Job was cancelled.");
+  }
 
   if (options.json) {
-    console.log(JSON.stringify(buildJobJsonPayload(job), null, 2));
+    console.log(JSON.stringify(buildJobJsonPayload(latest), null, 2));
+  } else if (latest.status === "cancelled") {
+    process.stdout.write(`Cancelled Job ${latest.id}.\n`);
   } else {
-    process.stdout.write(`Cancelled Job ${job.id}.\n`);
+    process.stdout.write(`Job ${latest.id} finished (status: ${latest.status}) before it could be cancelled.\n`);
   }
 }
 

@@ -169,7 +169,9 @@ export async function runMcode(options) {
     function captureSessionId(sessionId) {
       if (!sessionId || sessionId === capturedSessionId) return;
       capturedSessionId = sessionId;
-      options.onSessionId?.(sessionId);
+      try {
+        options.onSessionId?.(sessionId);
+      } catch {}
     }
     let execCompletedResult = null;
     let stderr = "";
@@ -216,9 +218,11 @@ export async function runMcode(options) {
       try {
         child.kill(sig);
       } catch {}
-      options.onSignal?.(sig);
-      const code = sig === "SIGINT" ? 130 : sig === "SIGTERM" ? 143 : 129;
-      process.exit(code);
+      try {
+        options.onSignal?.(sig);
+      } finally {
+        process.exit(sig === "SIGINT" ? 130 : sig === "SIGTERM" ? 143 : 129);
+      }
     };
 
     const onSigTerm = () => forwardSignal("SIGTERM");
