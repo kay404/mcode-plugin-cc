@@ -47,7 +47,7 @@ Checks that Node meets version requirements (`>=22.19 <23 || >=24 <27`), `mcode`
 
 ### `delegate`
 
-Hands an investigation, diagnosis, or implementation task to `mcode`. By default, delegations run with write intent in the foreground and stream progress updates.
+Hands an investigation, diagnosis, or implementation task to `mcode`. By default, delegations run with write intent and the command waits for the result.
 
 Claude may also invoke the `mcode-delegate` agent autonomously for substantial or stuck work. Continuation phrasing in the prompt (such as "continue", "keep going", "apply the top fix", or "dig deeper") automatically routes to `--resume` and sends only the delta instruction.
 
@@ -65,7 +65,8 @@ Claude may also invoke the `mcode-delegate` agent autonomously for substantial o
       `Error: No resumable mcode session found for this Claude session.`
     - Resuming while another delegation in this Claude session is running or queued is refused with an error.
   - Model & effort: left unset so `mcode` defaults apply, unless explicitly specified.
-  - Execution mode: runs in foreground by default. Passing `--background` starts a detached background worker and returns the Job ID immediately.
+  - Execution mode: the `mcode-delegate` agent always starts a background Job (a detached worker) and waits for it with `status --wait` in calls of at most 9 minutes, then prints `result`. Long runs are therefore not cut off by Claude Code's Bash timeout, and interrupting Claude does not stop the Job; use `/mcode:cancel` for that. Passing `--background` returns the Job ID immediately instead of waiting.
+  - Calling the companion directly without `--background` (for example from a script) still runs in the foreground and streams progress lines to stderr.
 - **Examples**:
   ```text
   /mcode:delegate Fix the failing authentication unit tests
@@ -215,6 +216,7 @@ The plugin provides a soft, best-effort read-only guarantee. **It is not an OS o
 - **Session Lifecycle**:
   - At session end, running or queued Jobs started by that session are terminated and marked `cancelled`.
   - Finished Jobs are preserved so `/mcode:result` and follow-up `/mcode:delegate --resume` continue to work when resuming the session with `claude --continue`.
+- **Stopped Jobs**: a Job stopped by `SIGTERM`, `SIGINT` or `SIGHUP` is recorded as `cancelled`. If the process running a Job dies without recording anything (for example `SIGKILL`), the next `status`, `result`, `cancel` or `delegate` call marks it `failed` with reason `process-lost`. Changes it already made stay in the working tree. The mcode session id is recorded as soon as mcode reports it, so such a Job can still be continued with `--resume` or opened with `mcode --session <id>`.
 - **Session Footer**: Results conclude with an mcode session footer whenever an mcode session ID was captured:
   ```text
   ---

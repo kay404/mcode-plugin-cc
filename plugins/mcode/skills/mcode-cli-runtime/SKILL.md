@@ -8,11 +8,14 @@ user-invocable: false
 
 Use this skill inside the `mcode:mcode-delegate` agent.
 
-Primary helper:
-- `node "${CLAUDE_PLUGIN_ROOT}/scripts/mcode-companion.mjs" delegate [--read-only] [--full] [--resume] [--fresh] [--model <model>] [--effort <effort>] [--json] "<prompt>"`
+Helpers, in order:
+- `node "${CLAUDE_PLUGIN_ROOT}/scripts/mcode-companion.mjs" delegate --background [--read-only] [--full] [--resume] [--fresh] [--model <model>] [--effort <effort>] "<prompt>"`
+- `node "${CLAUDE_PLUGIN_ROOT}/scripts/mcode-companion.mjs" status <job-id> --wait --timeout-ms 540000` (Bash `timeout` 600000; repeat while it prints `Timed out waiting for Job`)
+- `node "${CLAUDE_PLUGIN_ROOT}/scripts/mcode-companion.mjs" result <job-id>`
 
 Execution rules:
-- The delegate agent is a thin forwarder, not an orchestrator. Its only job is to invoke `delegate` once and return that stdout unchanged.
+- The delegate agent is a thin forwarder, not an orchestrator. It starts a background Job, waits for it, and returns the `result` stdout unchanged. When the user asked for background execution it returns the launch output instead and does not wait.
+- Waiting in bounded `status --wait` calls keeps each Bash call under the tool timeout, and an interrupted wait leaves the Job running; use `/mcode:cancel` to stop it.
 - Prefer the companion helper over direct `mcode` CLI strings or manual subprocess execution.
 - Use `delegate` for diagnosis, research, and implementation requests.
 - Add `--full` only when the user explicitly requests full permission. Add `--read-only` when the user asks for read-only behavior or research without modifications. Do not pass `--permission`.
@@ -30,6 +33,6 @@ Prompt composition guidance:
 - For follow-up turns on an existing session, send only the delta instruction rather than repeating prior context.
 
 Safety and output rules:
-- Return the stdout of the `delegate` command exactly as-is.
+- Return the stdout of the `result` command (or of `delegate` when it fails or the user asked for background execution) exactly as-is.
 - Do not inspect files, run tests, or attempt Claude-side fixes.
 - If the companion command fails, report the error verbatim and do not substitute a Claude-generated implementation.
