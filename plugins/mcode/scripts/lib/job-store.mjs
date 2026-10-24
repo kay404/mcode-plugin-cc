@@ -210,6 +210,18 @@ export function findLatestActiveJob(cwd, options = {}) {
   return loadJobOrThrow(cwd, active.id);
 }
 
+export function isProcessAlive(pid) {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch {}
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {}
+  return false;
+}
+
 export function terminateJobProcess(pid, { graceMs = 200 } = {}) {
   if (!pid || typeof pid !== "number") return;
 
@@ -228,29 +240,17 @@ export function terminateJobProcess(pid, { graceMs = 200 } = {}) {
     return sent;
   }
 
-  function isAlive() {
-    try {
-      process.kill(-pid, 0);
-      return true;
-    } catch {}
-    try {
-      process.kill(pid, 0);
-      return true;
-    } catch {}
-    return false;
-  }
-
   if (!sendSignal("SIGTERM")) {
     return;
   }
 
   const start = Date.now();
   while (Date.now() - start < graceMs) {
-    if (!isAlive()) return;
+    if (!isProcessAlive(pid)) return;
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
   }
 
-  if (isAlive()) {
+  if (isProcessAlive(pid)) {
     sendSignal("SIGKILL");
   }
 }

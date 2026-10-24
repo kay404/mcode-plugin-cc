@@ -32,9 +32,18 @@ if (process.env.MCODE_RECORD_PID) {
   fs.writeFileSync(process.env.MCODE_RECORD_PID, String(process.pid), "utf8");
 }
 
-if (process.env.MCODE_SLEEP_MS) {
+function sleep() {
   const ms = parseInt(process.env.MCODE_SLEEP_MS, 10);
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+// When set, the first N fixture lines are emitted before sleeping, so a run can be observed mid-stream.
+const sleepAfterLines = process.env.MCODE_SLEEP_AFTER_LINES
+  ? parseInt(process.env.MCODE_SLEEP_AFTER_LINES, 10)
+  : null;
+
+if (process.env.MCODE_SLEEP_MS && sleepAfterLines === null) {
+  sleep();
 }
 
 if (process.env.MCODE_FAIL_EXIT_CODE) {
@@ -99,7 +108,15 @@ if (process.env.MCODE_MUTATIONS) {
 const fixturePath = process.env.MCODE_FIXTURE;
 if (fixturePath && fs.existsSync(fixturePath)) {
   const streamData = fs.readFileSync(fixturePath, "utf8");
-  process.stdout.write(streamData);
+  if (sleepAfterLines !== null) {
+    const lines = streamData.split("\n");
+    // writeSync: an async pipe write would not be flushed before the blocking sleep.
+    fs.writeSync(1, lines.slice(0, sleepAfterLines).join("\n") + "\n");
+    if (process.env.MCODE_SLEEP_MS) sleep();
+    process.stdout.write(lines.slice(sleepAfterLines).join("\n"));
+  } else {
+    process.stdout.write(streamData);
+  }
 }
 
 if (process.env.MCODE_STDERR) {
