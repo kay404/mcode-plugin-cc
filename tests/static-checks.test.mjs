@@ -65,7 +65,7 @@ function parseFrontmatter(content) {
 
 test("manifests have matching versions and correct metadata", () => {
   const version = checkVersions(ROOT_DIR);
-  assert.equal(version, "0.1.0");
+  assert.equal(version, "0.1.1");
 
   const marketplace = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, ".claude-plugin/marketplace.json"), "utf8"));
   const plugin = JSON.parse(fs.readFileSync(path.join(PLUGIN_DIR, ".claude-plugin/plugin.json"), "utf8"));
@@ -151,7 +151,7 @@ test("version-check script CLI exits 0 on match and 1 on mismatch", () => {
 
     const passRun = spawnSync(process.execPath, [versionCheckScript, ROOT_DIR], { encoding: "utf8" });
     assert.equal(passRun.status, 0);
-    assert.match(passRun.stdout, /Version check passed: 0\.1\.0/);
+    assert.match(passRun.stdout, /Version check passed: 0\.1\.1/);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
