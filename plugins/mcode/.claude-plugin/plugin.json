@@ -1,6 +1,6 @@
 {
   "name": "mcode",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Claude Code plugin that lets Claude hand work to MiniMax's mcode CLI agent.",
   "author": {
     "name": "kay404"
