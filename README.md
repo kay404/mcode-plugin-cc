@@ -55,7 +55,7 @@ Claude may also invoke the `mcode-delegate` agent autonomously for substantial o
 - **Defaults & rules**:
   - Permission: defaults to `smart`. `--full` is granted only on explicit user request. `off` is permanently disabled in the plugin for safety.
   - Smart permission in a headless run: mcode cannot ask for approval, so tool calls it would normally ask about fail instead (for example `docker`, a database server, some formatters). The result lists every blocked call; rerun with `--full` if they are needed. mcode 0.6.12 has no per-command allowlist.
-  - Untracked files: a write-mode delegation in a git repository lists the untracked files that did not exist before the run, gitignored ones included (such as a generated config file). A new directory is listed once rather than file by file.
+  - Untracked files: a write-mode delegation in a git repository lists the untracked paths that did not exist after the run started, gitignored ones included (such as a generated config file). A new directory is listed once rather than file by file. New files inside a directory that was already untracked or ignored (for example `node_modules/`) are not listed, and files someone else creates during the run are.
   - Read-only: defaults to false (write intent enabled). When `--read-only` is set, prompt instructions forbid file modifications and the workspace guard checks for alterations before and after execution.
   - Session continuation: if neither `--resume` nor `--fresh` is passed and a resumable mcode session exists from the newest finished delegate Job (completed, failed, or cancelled) of this Claude session that has an mcode session ID, the command asks once:
     - Option 1 (Recommended): "Continue the current mcode session" (`--resume`)
@@ -68,6 +68,7 @@ Claude may also invoke the `mcode-delegate` agent autonomously for substantial o
     - Resuming while another delegation in this Claude session is running or queued is refused with an error.
   - Model & effort: left unset so `mcode` defaults apply, unless explicitly specified.
   - Execution mode: the `mcode-delegate` agent always starts a background Job (a detached worker) and waits for it with `status --wait` in calls of at most 9 minutes, then prints `result`. Long runs are therefore not cut off by Claude Code's Bash timeout, and interrupting Claude does not stop the Job; use `/mcode:cancel` for that. Passing `--background` returns the Job ID immediately instead of waiting.
+  - Background launch output: the first line is `Job <job-id> started in the background.`, the second `Run settings: model …, effort …, permission …` with the requested values.
   - Calling the companion directly without `--background` (for example from a script) still runs in the foreground and streams progress lines to stderr.
 - **Examples**:
   ```text
@@ -148,7 +149,7 @@ Lists Jobs belonging to the current Claude session or inspects the progress of a
   - Without `job-id`: lists Jobs in the current Claude session showing ID, kind, state, age, and progress preview.
   - With `job-id`: displays Job metadata and the last 10 progress log lines. Job IDs can be specified by unique prefix.
   - Waiting: passing `--wait` or `--timeout-ms <ms>` (which on its own implies waiting) blocks until the Job reaches a terminal state (`completed`, `failed`, or `cancelled`). Defaults to a 240,000 ms timeout. If no `job-id` is provided, waits on the newest Job in the session. Exit codes: `0` when the Job has finished (whatever its state), `124` when the wait timed out with the Job still running, `1` for any other error.
-  - Job details show the first line of the task as the title, plus the run settings: the model mcode reported (or the requested one, or `mcode default`), effort and permission. `--json` returns the full record, including `mcodeModel`, `blockedToolCalls` and `newUntrackedPaths`.
+  - Job details show the first line of the task as the title, plus the run settings: the model mcode reported (until the first turn finishes, and for runs that end without one, the requested model marked `(requested)` or `mcode default`), effort and permission. `--json` returns the full record, including `mcodeModel`, `blockedToolCalls` and `newUntrackedPaths`.
   - `--all`: lists or inspects Jobs across all Claude sessions in this workspace.
 - **Examples**:
   ```text
@@ -220,7 +221,7 @@ The plugin provides a soft, best-effort read-only guarantee. **It is not an OS o
   - At session end, running or queued Jobs started by that session are terminated and marked `cancelled`.
   - Finished Jobs are preserved so `/mcode:result` and follow-up `/mcode:delegate --resume` continue to work when resuming the session with `claude --continue`.
 - **Stopped Jobs**: a Job stopped by `SIGTERM`, `SIGINT` or `SIGHUP` is recorded as `cancelled`. If the process running a Job dies without recording anything (for example `SIGKILL`), the next `status`, `result`, `cancel` or `delegate` call marks it `failed` with reason `process-lost`; a `status --wait` already in progress notices within a second. The same happens to a background Job whose worker has not started within a minute. Changes it already made stay in the working tree. A `SIGKILL` cannot be forwarded, so after killing a foreground companion that way the `mcode` process it started may keep running and editing files; stop it yourself. The mcode session id is recorded as soon as mcode reports it, so such a Job can still be continued with `--resume` or opened with `mcode --session <id>`.
-- **Footer**: Results conclude with a footer. The session lines appear whenever an mcode session ID was captured; the run line always does, and names the model mcode reported, the effort (`mcode default` unless one was requested) and the permission:
+- **Footer**: Results conclude with a footer. The session lines appear whenever an mcode session ID was captured; the run line always does, and names the model mcode reported (falling back as in Job details), the effort (`mcode default` unless one was requested) and the permission:
   ```text
   ---
   mcode session: <session-id>

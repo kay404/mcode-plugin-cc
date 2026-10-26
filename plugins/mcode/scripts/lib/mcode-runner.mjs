@@ -229,10 +229,9 @@ export async function runMcode(options) {
         captureSessionId(execCompletedResult?.sessionId);
       }
 
-      const reportedModel = describeModel(event.model ?? execCompletedResult?.model);
-      if (reportedModel && reportedModel !== model) {
-        model = reportedModel;
-        notify(options.onModel, model);
+      // exec.completed echoes the requested model even when it never ran, so only a completed turn counts.
+      if (event.type === "turn.completed") {
+        model = describeModel(event.model) ?? model;
       }
 
       const blocked = describeBlockedToolCall(event);

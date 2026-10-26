@@ -61,7 +61,7 @@ test("tool calls blocked by smart permission are listed in the result and status
     env: { MCODE_FIXTURE: path.join(FIXTURES_DIR, "permission-denied-handled.stream.jsonl") }
   });
   assert.equal(res.status, 0, res.stderr);
-  assert.match(res.stdout, /smart permission blocked these tool calls[^\n]*--full allows them\):\n  - bash: printf 'test' > \/tmp\/mcode-outside-test\.txt\n  - write: \/tmp\/mcode-outside-test\.txt\n/);
+  assert.match(res.stdout, /headless mcode run cannot ask for approval[^\n]*\):\n  - bash: printf 'test' > \/tmp\/mcode-outside-test\.txt\n  - write: \/tmp\/mcode-outside-test\.txt\n/);
 
   const job = latestJob(pluginDataDir);
   assert.deepEqual(job.blockedToolCalls, [
@@ -126,4 +126,27 @@ test("a read-only delegation does not report new untracked files separately", ()
   const res = runCompanion(["delegate", "--read-only", "inspect"], { cwd: repo });
   assert.equal(res.status, 0, res.stderr);
   assert.doesNotMatch(res.stdout, /New untracked files/);
+});
+
+test("a failed run does not report the requested model as the one mcode ran", () => {
+  const pluginDataDir = makeTempDir("mcode-test-observability-");
+  const res = runCompanion(["delegate", "--model", "nonexistent/model", "task"], {
+    pluginDataDir,
+    env: { MCODE_FIXTURE: path.join(FIXTURES_DIR, "invalid-model.stream.jsonl") }
+  });
+  assert.match(res.stdout, /mcode run: model nonexistent\/model \(requested\),/);
+  assert.equal(latestJob(pluginDataDir).mcodeModel, null);
+});
+
+test("an index entry left behind by a lost update is resynced from the Job file", () => {
+  const pluginDataDir = makeTempDir("mcode-test-observability-");
+  assert.equal(runCompanion(["delegate", "task"], { pluginDataDir }).status, 0);
+  const stateRoot = path.join(pluginDataDir, "state");
+  const stateFile = path.join(stateRoot, fs.readdirSync(stateRoot)[0], "state.json");
+  const state = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+  state.jobs[0].status = "running";
+  fs.writeFileSync(stateFile, JSON.stringify(state), "utf8");
+
+  const list = JSON.parse(runCompanion(["status", "--json"], { pluginDataDir }).stdout);
+  assert.equal(list[0].status, "completed");
 });

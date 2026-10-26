@@ -227,7 +227,10 @@ function reconcileLostJobs(workspaceRoot) {
   for (const item of loadState(workspaceRoot).jobs) {
     if (FINISHED_STATUSES.has(item.status)) continue;
     const job = loadJob(workspaceRoot, item.id);
-    if (job) reconcileLostJob(workspaceRoot, job);
+    if (!job) continue;
+    // A concurrent save can drop a finished Job's last index update; the Job file is authoritative.
+    if (FINISHED_STATUSES.has(job.status)) saveJob(workspaceRoot, job);
+    else reconcileLostJob(workspaceRoot, job);
   }
 }
 
@@ -257,10 +260,6 @@ async function executeJob(job, workspaceRoot, onProgress = () => {}) {
       onProgress,
       onSessionId: (sessionId) => {
         job.mcodeSessionId = sessionId;
-        saveRunningJob();
-      },
-      onModel: (model) => {
-        job.mcodeModel = model;
         saveRunningJob();
       },
       onBlockedToolCalls: (blockedToolCalls) => {

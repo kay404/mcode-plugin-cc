@@ -151,7 +151,7 @@ function renderRunNotes(job) {
   const sections = [];
   if (job.blockedToolCalls?.length) {
     sections.push([
-      "mcode's smart permission blocked these tool calls (a headless run cannot ask for approval; --full allows them):",
+      "These tool calls failed because a headless mcode run cannot ask for approval (--full allows those that smart permission blocked):",
       ...job.blockedToolCalls.map((call) => `  - ${call}`)
     ].join("\n"));
   }

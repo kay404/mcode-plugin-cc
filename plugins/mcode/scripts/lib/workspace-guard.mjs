@@ -166,7 +166,8 @@ export function listUntrackedPaths(workspaceRoot) {
   if (!isGitWorkspace(workspaceRoot)) return null;
   try {
     const statusBuffer = execFileSync("git", ["-C", workspaceRoot, "status", "--porcelain=v1", "-z", "--untracked-files=normal", "--ignored=matching"], {
-      stdio: ["ignore", "pipe", "ignore"]
+      stdio: ["ignore", "pipe", "ignore"],
+      maxBuffer: 64 * 1024 * 1024
     });
     return parseGitStatusZ(statusBuffer).filter((e) => e.code === "??" || e.code === "!!").map((e) => e.path);
   } catch {
