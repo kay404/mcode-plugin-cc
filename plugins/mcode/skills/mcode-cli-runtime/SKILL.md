@@ -10,7 +10,7 @@ Use this skill inside the `mcode:mcode-delegate` agent.
 
 Helpers, in order:
 - `node "${CLAUDE_PLUGIN_ROOT}/scripts/mcode-companion.mjs" delegate --background [--read-only] [--full] [--resume] [--fresh] [--model <model>] [--effort <effort>] "<prompt>"`
-- `node "${CLAUDE_PLUGIN_ROOT}/scripts/mcode-companion.mjs" status <job-id> --wait --timeout-ms 540000` (Bash `timeout` 600000; repeat while it prints `Timed out waiting for Job`)
+- `node "${CLAUDE_PLUGIN_ROOT}/scripts/mcode-companion.mjs" status <job-id> --wait --timeout-ms 540000` (Bash `timeout` 600000; repeat while it exits with code 124, `Timed out waiting for Job`)
 - `node "${CLAUDE_PLUGIN_ROOT}/scripts/mcode-companion.mjs" result <job-id>`
 
 Execution rules:

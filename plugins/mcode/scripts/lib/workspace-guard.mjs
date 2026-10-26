@@ -159,3 +159,16 @@ export function evaluateWorkspaceGuard(snapshotBefore, workspaceRoot) {
 
   return outcome;
 }
+
+// Returns null when the untracked files cannot be listed (not a git repository, or git failed).
+export function listUntrackedPaths(workspaceRoot) {
+  if (!isGitWorkspace(workspaceRoot)) return null;
+  try {
+    const statusBuffer = execFileSync("git", ["-C", workspaceRoot, "status", "--porcelain=v1", "-z", "-uall"], {
+      stdio: ["ignore", "pipe", "ignore"]
+    });
+    return parseGitStatusZ(statusBuffer).filter((e) => e.code === "??").map((e) => e.path);
+  } catch {
+    return null;
+  }
+}
