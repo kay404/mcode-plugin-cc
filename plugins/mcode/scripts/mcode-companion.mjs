@@ -299,7 +299,7 @@ async function executeJob(job, workspaceRoot, onProgress = () => {}) {
 
   if (untrackedBefore) {
     const before = new Set(untrackedBefore);
-    job.newUntrackedPaths = (listUntrackedPaths(workspaceRoot) ?? []).filter((p) => !before.has(p));
+    job.newUntrackedPaths = (listUntrackedPaths(workspaceRoot) ?? []).filter((p) => !before.has(p)).sort();
   }
 
   job.status = outcome.status;

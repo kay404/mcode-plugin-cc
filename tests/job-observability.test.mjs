@@ -17,7 +17,8 @@ function initTestRepo() {
   execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: dir });
   fs.writeFileSync(path.join(dir, "tracked.txt"), "initial\n", "utf8");
   fs.writeFileSync(path.join(dir, "already-untracked.txt"), "user file\n", "utf8");
-  execFileSync("git", ["add", "tracked.txt"], { cwd: dir });
+  fs.writeFileSync(path.join(dir, ".gitignore"), "configs/config.yaml\n", "utf8");
+  execFileSync("git", ["add", "tracked.txt", ".gitignore"], { cwd: dir });
   execFileSync("git", ["commit", "-q", "-m", "initial"], { cwd: dir });
   return dir;
 }
@@ -103,19 +104,20 @@ test("status --wait exits 124 when it times out, so callers need not match the m
   }
 });
 
-test("a write-mode delegation lists the untracked files it left behind, not ones that were already there", () => {
+test("a write-mode delegation lists the untracked and gitignored files it left behind, not ones that were already there", () => {
   const repo = initTestRepo();
   const res = runCompanion(["delegate", "generate config"], {
     cwd: repo,
     env: {
       MCODE_MUTATIONS: JSON.stringify([
         { action: "create", path: "configs/config.yaml", content: "db: local\n" },
+        { action: "create", path: "generated/a/b.txt", content: "x\n" },
         { action: "modify", path: "tracked.txt", content: "changed\n" }
       ])
     }
   });
   assert.equal(res.status, 0, res.stderr);
-  assert.match(res.stdout, /New untracked files left in the working tree:\n  - configs\/config\.yaml\n/);
+  assert.match(res.stdout, /New untracked files left in the working tree \(gitignored ones included\):\n  - configs\/config\.yaml\n  - generated\/\n\n/);
   assert.doesNotMatch(res.stdout, /already-untracked\.txt|tracked\.txt\n/);
 });
 

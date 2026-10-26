@@ -55,7 +55,7 @@ Claude may also invoke the `mcode-delegate` agent autonomously for substantial o
 - **Defaults & rules**:
   - Permission: defaults to `smart`. `--full` is granted only on explicit user request. `off` is permanently disabled in the plugin for safety.
   - Smart permission in a headless run: mcode cannot ask for approval, so tool calls it would normally ask about fail instead (for example `docker`, a database server, some formatters). The result lists every blocked call; rerun with `--full` if they are needed. mcode 0.6.12 has no per-command allowlist.
-  - Untracked files: a write-mode delegation in a git repository lists the untracked files that did not exist before the run, such as generated config files.
+  - Untracked files: a write-mode delegation in a git repository lists the untracked files that did not exist before the run, gitignored ones included (such as a generated config file). A new directory is listed once rather than file by file.
   - Read-only: defaults to false (write intent enabled). When `--read-only` is set, prompt instructions forbid file modifications and the workspace guard checks for alterations before and after execution.
   - Session continuation: if neither `--resume` nor `--fresh` is passed and a resumable mcode session exists from the newest finished delegate Job (completed, failed, or cancelled) of this Claude session that has an mcode session ID, the command asks once:
     - Option 1 (Recommended): "Continue the current mcode session" (`--resume`)

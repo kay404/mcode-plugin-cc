@@ -159,7 +159,7 @@ function renderRunNotes(job) {
   if (paths.length) {
     const listed = paths.slice(0, MAX_LISTED_PATHS).map((p) => `  - ${p}`);
     if (paths.length > MAX_LISTED_PATHS) listed.push(`  - ... and ${paths.length - MAX_LISTED_PATHS} more`);
-    sections.push(["New untracked files left in the working tree:", ...listed].join("\n"));
+    sections.push(["New untracked files left in the working tree (gitignored ones included):", ...listed].join("\n"));
   }
   return sections.length ? `\n\n${sections.join("\n\n")}` : "";
 }
