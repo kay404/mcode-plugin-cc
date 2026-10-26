@@ -159,3 +159,18 @@ export function evaluateWorkspaceGuard(snapshotBefore, workspaceRoot) {
 
   return outcome;
 }
+
+// Untracked and gitignored paths; a directory that is entirely new or ignored is one entry, which keeps node_modules cheap.
+// Returns null when they cannot be listed (not a git repository, or git failed).
+export function listUntrackedPaths(workspaceRoot) {
+  if (!isGitWorkspace(workspaceRoot)) return null;
+  try {
+    const statusBuffer = execFileSync("git", ["-C", workspaceRoot, "status", "--porcelain=v1", "-z", "--untracked-files=normal", "--ignored=matching"], {
+      stdio: ["ignore", "pipe", "ignore"],
+      maxBuffer: 64 * 1024 * 1024
+    });
+    return parseGitStatusZ(statusBuffer).filter((e) => e.code === "??" || e.code === "!!").map((e) => e.path);
+  } catch {
+    return null;
+  }
+}

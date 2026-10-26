@@ -21,7 +21,7 @@ Every Delegation runs as a background Job, so a long mcode run is never cut off 
    - If the user asked for background execution, return that output as-is and stop.
 2. Wait for the Job:
    `node "${CLAUDE_PLUGIN_ROOT}/scripts/mcode-companion.mjs" status <job-id> --wait --timeout-ms 540000`
-   Run it with the Bash tool's `timeout` set to 600000. If it prints `Timed out waiting for Job`, run the same command again. If it fails with any other error, return its output as-is and stop. Otherwise the Job has finished; go on to step 3.
+   Run it with the Bash tool's `timeout` set to 600000. If it exits with code 124 (`Timed out waiting for Job`), run the same command again. If it fails with any other error, return its output as-is and stop. Otherwise the Job has finished; go on to step 3.
 3. Print the result:
    `node "${CLAUDE_PLUGIN_ROOT}/scripts/mcode-companion.mjs" result <job-id>`
    Return its stdout exactly as-is.

@@ -84,13 +84,21 @@ export function loadState(cwd = process.cwd(), options = {}) {
   }
 }
 
+// Other companion processes read these files at any moment; a rename never exposes a half-written file.
+// debt: concurrent saves still race on the state.json read-modify-write, so one index update can be lost; a lock file would fix it.
+function writeFileAtomic(file, content) {
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, content, "utf8");
+  fs.renameSync(tmp, file);
+}
+
 export function saveJob(cwd, job, options = {}) {
   const jobsDir = resolveJobsDir(cwd, options);
   fs.mkdirSync(jobsDir, { recursive: true });
 
   const jobFile = resolveJobFile(cwd, job.id, options);
   job.updatedAt = new Date().toISOString();
-  fs.writeFileSync(jobFile, JSON.stringify(job, null, 2), "utf8");
+  writeFileAtomic(jobFile, JSON.stringify(job, null, 2));
 
   const state = loadState(cwd, options);
   const existingIndex = state.jobs.findIndex((j) => j.id === job.id);
@@ -130,7 +138,7 @@ export function saveJob(cwd, job, options = {}) {
   }
 
   const stateFile = path.join(resolveStateDir(cwd, options), "state.json");
-  fs.writeFileSync(stateFile, JSON.stringify(state, null, 2), "utf8");
+  writeFileAtomic(stateFile, JSON.stringify(state, null, 2));
 }
 
 export function appendJobLog(cwd, jobId, line) {

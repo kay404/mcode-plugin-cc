@@ -159,6 +159,32 @@ export function mapMcodeResultToOutcome(execResult, stderr = "") {
   return { ...base, error: error ?? { message: stderr.trim() || FAILURE_REASONS.error.defaultMessage } };
 }
 
+function notify(callback, value) {
+  try {
+    callback?.(value);
+  } catch {}
+}
+
+function describeModel(model) {
+  if (!model?.providerId || !model?.modelId) return null;
+  return `${model.providerId}/${model.modelId}`;
+}
+
+const BLOCKED_TOOL_PREFIX = "HOST_CAPABILITY_UNAVAILABLE";
+
+// Headless smart mode cannot ask for approval, so mcode fails the tool call with this error instead.
+export function describeBlockedToolCall(event) {
+  if (event?.type !== "item.completed" || event.item?.type !== "tool_call") return null;
+  const toolCall = event.item.toolCall;
+  const texts = (toolCall?.output?.content ?? []).map((c) => c?.text ?? "");
+  if (!texts.some((t) => t.startsWith(BLOCKED_TOOL_PREFIX))) return null;
+  const input = toolCall.input ?? {};
+  const target = input.command ?? input.path ?? JSON.stringify(input);
+  const firstLine = String(target).split("\n")[0];
+  const shown = firstLine.length > 120 ? `${firstLine.slice(0, 117)}...` : firstLine;
+  return `${toolCall.name ?? "tool"}: ${shown}`;
+}
+
 export async function runMcode(options) {
   const argv = buildMcodeArgv(options);
   const onProgress = options.onProgress ?? (() => {});
@@ -169,10 +195,10 @@ export async function runMcode(options) {
     function captureSessionId(sessionId) {
       if (!sessionId || sessionId === capturedSessionId) return;
       capturedSessionId = sessionId;
-      try {
-        options.onSessionId?.(sessionId);
-      } catch {}
+      notify(options.onSessionId, sessionId);
     }
+    let model = null;
+    const blockedToolCalls = [];
     let execCompletedResult = null;
     let stderr = "";
     let stdoutBuffer = "";
@@ -201,6 +227,17 @@ export async function runMcode(options) {
       if (event.type === "exec.completed") {
         execCompletedResult = event.result ?? null;
         captureSessionId(execCompletedResult?.sessionId);
+      }
+
+      // exec.completed echoes the requested model even when it never ran, so only a completed turn counts.
+      if (event.type === "turn.completed") {
+        model = describeModel(event.model) ?? model;
+      }
+
+      const blocked = describeBlockedToolCall(event);
+      if (blocked && !blockedToolCalls.includes(blocked)) {
+        blockedToolCalls.push(blocked);
+        notify(options.onBlockedToolCalls, [...blockedToolCalls]);
       }
 
       const progressMsg = describeProgress(event);
@@ -278,6 +315,8 @@ export async function runMcode(options) {
       if (!outcome.mcodeSessionId && capturedSessionId) {
         outcome.mcodeSessionId = capturedSessionId;
       }
+      outcome.model = model;
+      outcome.blockedToolCalls = blockedToolCalls;
 
       resolve({
         ...outcome,

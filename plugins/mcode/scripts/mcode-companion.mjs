@@ -45,10 +45,12 @@ import {
   renderStatusTable,
   renderJobDetail,
   buildJobJsonPayload,
-  formatAge
+  describeRunSettings,
+  formatAge,
+  shortTitle
 } from "./lib/render.mjs";
 import { runSetupChecks, renderSetupResult } from "./lib/setup.mjs";
-import { captureWorkspaceSnapshot, evaluateWorkspaceGuard, isGitWorkspace } from "./lib/workspace-guard.mjs";
+import { captureWorkspaceSnapshot, evaluateWorkspaceGuard, isGitWorkspace, listUntrackedPaths } from "./lib/workspace-guard.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SESSION_ID_ENV = "MCODE_CLAUDE_SESSION_ID";
@@ -180,6 +182,7 @@ function launchBackgroundWorker(job, workspaceRoot, logMessage, isJson) {
   } else {
     process.stdout.write([
       `Job ${job.id} started in the background.`,
+      `Run settings: ${describeRunSettings(job)}`,
       "",
       `To check progress:  /mcode:status ${job.id}`,
       `To read results:    /mcode:result ${job.id}`,
@@ -198,6 +201,8 @@ function markJobCancelled(job, workspaceRoot, logMessage) {
 }
 
 const QUEUED_GRACE_MS = 60_000;
+// Same code as timeout(1), so callers can tell "still running" from a real error.
+const WAIT_TIMEOUT_EXIT_CODE = 124;
 
 // A SIGKILLed or crashed companion cannot record its own outcome; finish such Jobs when they are next read.
 // A queued Job has no process yet, so it counts as lost once its worker has had ample time to claim it.
@@ -222,15 +227,24 @@ function reconcileLostJobs(workspaceRoot) {
   for (const item of loadState(workspaceRoot).jobs) {
     if (FINISHED_STATUSES.has(item.status)) continue;
     const job = loadJob(workspaceRoot, item.id);
-    if (job) reconcileLostJob(workspaceRoot, job);
+    if (!job) continue;
+    // A concurrent save can drop a finished Job's last index update; the Job file is authoritative.
+    if (FINISHED_STATUSES.has(job.status)) saveJob(workspaceRoot, job);
+    else reconcileLostJob(workspaceRoot, job);
   }
 }
 
 async function executeJob(job, workspaceRoot, onProgress = () => {}) {
   const readOnly = job.readOnly;
   const snapshotBefore = readOnly ? captureWorkspaceSnapshot(workspaceRoot) : null;
+  const untrackedBefore = readOnly ? null : listUntrackedPaths(workspaceRoot);
   const mcodePrompt = job.prompt && readOnly ? wrapReadOnlyPrompt(job.prompt) : job.prompt;
   const execCwd = job.cwd || workspaceRoot;
+
+  function saveRunningJob() {
+    if (loadJob(workspaceRoot, job.id)?.status === "cancelled") return;
+    saveJob(workspaceRoot, job);
+  }
 
   let outcome;
   try {
@@ -246,8 +260,11 @@ async function executeJob(job, workspaceRoot, onProgress = () => {}) {
       onProgress,
       onSessionId: (sessionId) => {
         job.mcodeSessionId = sessionId;
-        if (loadJob(workspaceRoot, job.id)?.status === "cancelled") return;
-        saveJob(workspaceRoot, job);
+        saveRunningJob();
+      },
+      onBlockedToolCalls: (blockedToolCalls) => {
+        job.blockedToolCalls = blockedToolCalls;
+        saveRunningJob();
       },
       onSignal: (signal) => markJobCancelled(job, workspaceRoot, `Job was cancelled (${signal}).`)
     });
@@ -279,6 +296,11 @@ async function executeJob(job, workspaceRoot, onProgress = () => {}) {
     }
   }
 
+  if (untrackedBefore) {
+    const before = new Set(untrackedBefore);
+    job.newUntrackedPaths = (listUntrackedPaths(workspaceRoot) ?? []).filter((p) => !before.has(p)).sort();
+  }
+
   job.status = outcome.status;
   job.reason = outcome.reason;
   job.output = outcome.output;
@@ -286,6 +308,12 @@ async function executeJob(job, workspaceRoot, onProgress = () => {}) {
   job.usage = outcome.usage || null;
   if (outcome.mcodeSessionId) {
     job.mcodeSessionId = outcome.mcodeSessionId;
+  }
+  if (outcome.model) {
+    job.mcodeModel = outcome.model;
+  }
+  if (outcome.blockedToolCalls?.length) {
+    job.blockedToolCalls = outcome.blockedToolCalls;
   }
   job.stderr = outcome.stderr;
   job.renderedOutput = renderDelegationResult(job);
@@ -464,7 +492,7 @@ async function handleResumeCandidate(rawTokens) {
     if (!candidate) {
       console.log("No resume candidate found.");
     } else {
-      console.log(`Resume candidate: ${candidate.id} (${candidate.mcodeSessionId})\n  Title: ${candidate.title}\n  Age: ${formatAge(candidate.createdAt)}`);
+      console.log(`Resume candidate: ${candidate.id} (${candidate.mcodeSessionId})\n  Title: ${shortTitle(candidate.title)}\n  Age: ${formatAge(candidate.createdAt)}`);
     }
   }
 }
@@ -545,7 +573,7 @@ async function handleStatus(rawTokens) {
     while (!FINISHED_STATUSES.has(currentJob.status)) {
       if (Date.now() - start >= timeoutMs) {
         console.error(`Error: Timed out waiting for Job ${currentJob.id} to finish.`);
-        process.exit(1);
+        process.exit(WAIT_TIMEOUT_EXIT_CODE);
       }
       await new Promise((resolve) => setTimeout(resolve, 500));
       currentJob = reconcileLostJob(workspaceRoot, loadJobOrThrow(workspaceRoot, job.id));

@@ -133,6 +133,37 @@ function renderAdversarialReviewOutput(output) {
   return lines.join("\n").trim();
 }
 
+const MAX_LISTED_PATHS = 20;
+
+// The model mcode reports wins over the one requested; effort is never reported, so only a requested one is known.
+export function describeRunSettings(job) {
+  const model = job.mcodeModel ?? (job.model ? `${job.model} (requested)` : "mcode default");
+  const permission = `${job.permission ?? "smart"}${job.readOnly ? ", read-only" : ""}`;
+  return `model ${model}, effort ${job.effort ?? "mcode default"}, permission ${permission}`;
+}
+
+export function shortTitle(title) {
+  const firstLine = String(title ?? "").trim().split("\n")[0].trim();
+  return firstLine.length > 80 ? `${firstLine.slice(0, 77)}...` : firstLine;
+}
+
+function renderRunNotes(job) {
+  const sections = [];
+  if (job.blockedToolCalls?.length) {
+    sections.push([
+      "These tool calls failed because a headless mcode run cannot ask for approval (--full allows those that smart permission blocked):",
+      ...job.blockedToolCalls.map((call) => `  - ${call}`)
+    ].join("\n"));
+  }
+  const paths = job.newUntrackedPaths ?? [];
+  if (paths.length) {
+    const listed = paths.slice(0, MAX_LISTED_PATHS).map((p) => `  - ${p}`);
+    if (paths.length > MAX_LISTED_PATHS) listed.push(`  - ... and ${paths.length - MAX_LISTED_PATHS} more`);
+    sections.push(["New untracked files left in the working tree (gitignored ones included):", ...listed].join("\n"));
+  }
+  return sections.length ? `\n\n${sections.join("\n\n")}` : "";
+}
+
 const KIND_OUTPUT_RENDERERS = {
   "adversarial-review": renderAdversarialReviewOutput,
   "review": renderOutput,
@@ -143,18 +174,19 @@ export function renderDelegationResult(job) {
   const noun = JOB_KIND_NOUNS[job.kind] ?? "delegation";
   const prefix = renderReadOnlyPrefix(job.readOnlyGuard, noun);
   const sessionId = job.mcodeSessionId;
-  const sessionFooter = sessionId
-    ? `\n\n---\nmcode session: ${sessionId}\nTo open this session in the mcode TUI: mcode --session ${sessionId}`
+  const sessionLines = sessionId
+    ? `\nmcode session: ${sessionId}\nTo open this session in the mcode TUI: mcode --session ${sessionId}`
     : "";
+  const footer = `${renderRunNotes(job)}\n\n---${sessionLines}\nmcode run: ${describeRunSettings(job)}`;
 
   if (job.status === "completed") {
     const render = KIND_OUTPUT_RENDERERS[job.kind] ?? renderOutput;
     const rawOutput = render(job.output);
-    return `${prefix}${rawOutput}${sessionFooter}\n`;
+    return `${prefix}${rawOutput}${footer}\n`;
   }
 
   if (job.status === "cancelled") {
-    return `${prefix}mcode ${noun} was cancelled.${sessionFooter}\n`;
+    return `${prefix}mcode ${noun} was cancelled.${footer}\n`;
   }
 
   const heading = getFailureHeading(job.reason, noun);
@@ -166,13 +198,13 @@ export function renderDelegationResult(job) {
       "",
       "To continue this session interactively, run:",
       `  ${command}`,
-      sessionFooter ? sessionFooter.trimStart() : ""
+      footer ? footer.trimStart() : ""
     ].filter(Boolean).join("\n") + "\n";
   }
 
   const reasonConfig = FAILURE_REASONS[job.reason] ?? FAILURE_REASONS.error;
   const err = job.error?.message || job.stderr || reasonConfig.defaultMessage;
-  return `${prefix}${heading}\n\n${err}${sessionFooter}\n`;
+  return `${prefix}${heading}\n\n${err}${footer}\n`;
 }
 
 export function formatAge(dateStr, now = Date.now()) {
@@ -231,10 +263,18 @@ export function renderJobDetail(job, progressLines = []) {
     `Job ID:         ${job.id}`,
     `Kind:           ${job.kind}`,
     `State:          ${job.status}${job.reason ? ` (${job.reason})` : ""}`,
-    `Title:          ${job.title || "-"}`,
+    `Title:          ${shortTitle(job.title) || "-"}`,
+    `Run settings:   ${describeRunSettings(job)}`,
     `Claude session: ${job.sessionId || "-"}`,
     `mcode session:  ${job.mcodeSessionId ? job.mcodeSessionId : "-"}`
   ];
+
+  if (job.blockedToolCalls?.length) {
+    lines.push("Blocked by smart permission:");
+    for (const call of job.blockedToolCalls) {
+      lines.push(`  - ${call}`);
+    }
+  }
 
   if (job.processId) {
     lines.push(`Process ID:     ${job.processId}`);
@@ -272,6 +312,12 @@ export function buildJobJsonPayload(job) {
     renderedOutput: job.renderedOutput ?? null,
     error: job.error ?? null,
     usage: job.usage ?? null,
+    model: job.model ?? null,
+    effort: job.effort ?? null,
+    permission: job.permission ?? null,
+    mcodeModel: job.mcodeModel ?? null,
+    blockedToolCalls: job.blockedToolCalls ?? [],
+    newUntrackedPaths: job.newUntrackedPaths ?? null,
     readOnly: job.readOnly,
     readOnlyGuard: job.readOnlyGuard ?? null,
     createdAt: job.createdAt,
